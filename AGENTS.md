@@ -21,8 +21,9 @@ them; fix the disagreement, not just the code.
 ## Working rules
 
 - Keep the surface minimal: a new option, state, or action must justify itself
-  against the README's contract or be cut. No queueing, no steering, no UI —
-  those are non-goals by design.
+  against the README's contract or be cut. No queueing, no steering, no fleet
+  UI — those are non-goals by design (the statusbar line and `/lanes`
+  command are the deliberate extent of the UI).
 - Fail fast, never silently fall back: validation happens at the tool boundary
   (slugs, brief paths, deadlines); a lane's failure becomes a visible state,
   not a swallowed error.

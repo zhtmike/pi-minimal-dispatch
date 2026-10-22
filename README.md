@@ -97,6 +97,14 @@ fresh one after the dispatcher exited — sees the same truth.
   is empty, or the stop reason was not clean. Refuses lanes still running or
   never spawned.
 
+## Status bar & `/lanes`
+
+While any tracked lane runs, the footer shows one line — e.g. `lanes: 2 running · 1 settled`
+— and clears itself when nothing is in flight. `/lanes` (optionally `/lanes <wave>`)
+prints the full status table for waves seen this session — an untracked wave name is
+resolved from the default workDir — and completes wave names. Both are TUI conveniences
+over the same derived state the `lanes` tool reports.
+
 ## How it works
 
 - **Lane**: `timeout <deadlineSec> pi --mode json --no-session -ns [flags] @<brief>`,

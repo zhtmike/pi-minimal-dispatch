@@ -13,9 +13,12 @@ import {
 	DEFAULT_DEADLINE_SEC,
 	KILL_GRACE_MS,
 	type LaneRecord,
+	type LaneStatus,
 	type Manifest,
 	deriveLane,
 	finalAssistantText,
+	formatStatusBarSummary,
+	formatWaveStatus,
 	manifestPathFor,
 	parseEvents,
 	pidAlive,
@@ -39,6 +42,60 @@ function resolveExecutable(name: string): string {
 }
 
 const SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
+// --- statusbar tracking (in-memory cache; manifest and event files stay authoritative) ---
+
+const STATUS_KEY = "pi-minimal-dispatch";
+const POLL_MS = 2000;
+
+type UiCtx = { mode: string; ui: { setStatus(key: string, text: string | undefined): void } };
+
+const tracked = new Map<string, string>(); // wave -> workDir
+let pollTimer: ReturnType<typeof setInterval> | null = null;
+let uiCtx: UiCtx | null = null;
+
+function statusBarTick(): void {
+	const ctx = uiCtx;
+	if (ctx === null) return;
+	const all: LaneStatus[] = [];
+	for (const [wave, workDir] of tracked) {
+		if (!fs.existsSync(manifestPathFor(workDir, wave))) {
+			tracked.delete(wave); // the wave was cleaned up
+			continue;
+		}
+		try {
+			const m = readManifest(workDir, wave);
+			all.push(...m.lanes.map((l) => deriveLane(l, Date.now())));
+		} catch {
+			// corrupt manifest/events: skipped this tick — /lanes and the lanes tool surface the error loudly
+		}
+	}
+	const summary = formatStatusBarSummary(all);
+	if (summary === undefined) {
+		ctx.ui.setStatus(STATUS_KEY, undefined);
+		stopPolling();
+	} else {
+		ctx.ui.setStatus(STATUS_KEY, summary);
+	}
+}
+
+function armPolling(): void {
+	if (pollTimer === null && tracked.size > 0 && uiCtx !== null && (uiCtx.mode === "tui" || uiCtx.mode === "rpc")) {
+		pollTimer = setInterval(statusBarTick, POLL_MS);
+	}
+}
+
+function trackWave(wave: string, workDir: string): void {
+	tracked.set(wave, workDir);
+	armPolling();
+}
+
+function stopPolling(): void {
+	if (pollTimer !== null) {
+		clearInterval(pollTimer);
+		pollTimer = null;
+	}
+}
 
 function assertSlugs(wave: string, names: string[]): void {
 	const bad: string[] = [];
@@ -198,6 +255,8 @@ const dispatchTool = defineTool({
 			throw e;
 		}
 
+		trackWave(params.wave, workDir);
+
 		const lines = manifest.lanes.map(
 			(l) =>
 				`  ${l.name}: ${l.spawned ? `pid ${l.pid} (deadline ${l.deadlineSec}s)` : `SPAWN ERROR: ${l.spawnError}`}`,
@@ -235,24 +294,13 @@ const lanesTool = defineTool({
 		const workDir = path.resolve(params.workDir ?? ".pi/work");
 		const action = params.action ?? "status";
 		const manifest = readManifest(workDir, params.wave);
+		trackWave(params.wave, workDir);
 
 		if (action === "status") {
 			const now = Date.now();
 			const statuses = manifest.lanes.map((l) => deriveLane(l, now));
-			const text = statuses
-				.map((s) => {
-					const bits = [s.name, s.state];
-					if (s.cause) bits.push(`(${s.cause}${s.spawnError ? `: ${s.spawnError}` : ""})`);
-					if (s.overdue) bits.push("OVERDUE");
-					bits.push(`${s.turns} turns`);
-					bits.push(`tok ${s.usage.input}in/${s.usage.output}out, $${s.usage.cost.toFixed(4)}`);
-					if (s.stopReason !== undefined) bits.push(`stop:${s.stopReason}`);
-					if (s.lastEventAgeSec !== null) bits.push(`last ${s.lastEventAgeSec}s ago`);
-					return `  ${bits.join(" · ")}` + (s.errTail ? `\n    err: ${s.errTail.replace(/\n/g, "\n    ")}` : "");
-				})
-				.join("\n");
 			return {
-				content: [{ type: "text", text: `wave '${params.wave}':\n${text}` }],
+				content: [{ type: "text", text: formatWaveStatus(params.wave, statuses) }],
 				structuredContent: { wave: params.wave, lanes: statuses },
 				details: { wave: params.wave },
 			};
@@ -344,4 +392,46 @@ const lanesTool = defineTool({
 export default function (pi: ExtensionAPI) {
 	pi.registerTool(dispatchTool);
 	pi.registerTool(lanesTool);
+
+	pi.on("session_start", (_event, ctx) => {
+		uiCtx = ctx;
+		// session replacement (new/resume/fork) keeps module state: re-arm if waves are still in flight
+		armPolling();
+	});
+
+	pi.on("session_shutdown", () => {
+		stopPolling();
+	});
+
+	pi.registerCommand("lanes", {
+		description: "Show dispatched lane status — /lanes [wave]",
+		getArgumentCompletions: (prefix) => {
+			const hits = [...tracked.keys()].filter((w) => w.startsWith(prefix));
+			return hits.length > 0 ? hits.map((w) => ({ value: w, label: w })) : null;
+		},
+		handler: async (args, ctx) => {
+			const show = (wave: string, workDir: string) =>
+				ctx.ui.notify(formatWaveStatus(wave, readManifest(workDir, wave).lanes.map((l) => deriveLane(l, Date.now()))), "info");
+			try {
+				const wave = args.trim();
+				if (wave === "") {
+					if (tracked.size === 0) {
+						ctx.ui.notify("no waves tracked this session", "info");
+						return;
+					}
+					for (const [w, workDir] of tracked) {
+						try {
+							show(w, workDir);
+						} catch {
+							// a vanished manifest must not hide the remaining waves
+						}
+					}
+					return;
+				}
+				show(wave, tracked.get(wave) ?? path.resolve(".pi/work"));
+			} catch (e: any) {
+				ctx.ui.notify(e.message, "error");
+			}
+		},
+	});
 }

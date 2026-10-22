@@ -9,8 +9,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
 	type LaneRecord,
+	type LaneStatus,
 	deriveLane,
 	finalAssistantText,
+	formatLaneLine,
+	formatStatusBarSummary,
 	parseEvents,
 	pidAlive,
 	psLstart,
@@ -132,6 +135,36 @@ const events = [
 ];
 check("finalAssistantText: last assistant message, text blocks joined", finalAssistantText(events) === "A\nB");
 check("finalAssistantText: no assistant message = empty", finalAssistantText([{ type: "message_end", message: { role: "user", content: "q" } }]) === "");
+
+// --- formatters ------------------------------------------------------------
+
+const st = (over: Partial<LaneStatus>): LaneStatus => ({
+	name: "lane",
+	state: "running",
+	turns: 1,
+	usage: { input: 10, output: 2, cacheRead: 0, cacheWrite: 0, cost: 0.001 },
+	lastEventAgeSec: 1,
+	...over,
+});
+
+check(
+	"statusbar: running lanes produce a summary; starting counts as running",
+	formatStatusBarSummary([st({ state: "running" }), st({ state: "starting", name: "b" }), st({ state: "settled", name: "c" })]) === "lanes: 2 running · 1 settled",
+);
+check(
+	"statusbar: done buckets in stable sorted order (failed before settled)",
+	formatStatusBarSummary([st({ state: "settled" }), st({ state: "running" }), st({ state: "failed", cause: "crashed", name: "d" })]) === "lanes: 1 running · 1 failed · 1 settled",
+);
+check(
+	"statusbar: nothing in flight → undefined (clear)",
+	formatStatusBarSummary([st({ state: "settled" }), st({ state: "failed", cause: "deadline", name: "b" })]) === undefined && formatStatusBarSummary([]) === undefined,
+);
+check(
+	"lane line: cause, overdue, err tail indentation",
+	formatLaneLine(st({ state: "failed", cause: "crashed", overdue: undefined, errTail: "boom\nsecond" })).includes("lane · failed · (crashed)") &&
+		formatLaneLine(st({ state: "running", overdue: true })).includes("OVERDUE") &&
+		formatLaneLine(st({ state: "failed", cause: "crashed", errTail: "boom" })).includes("\n    err: boom"),
+);
 
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(failures === 0 ? "\nall passed" : `\n${failures} FAILED`);
