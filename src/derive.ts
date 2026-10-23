@@ -1,14 +1,13 @@
 /**
- * pi-minimal-dispatch derived-state core — manifest, lane event parsing, state derivation.
- * Pure Node builtins: importable and testable without the pi host. Contract: README.md.
+ * pi-minimal-dispatch derived-state core — manifest registry, process
+ * liveness, and lane state derivation. Pure Node builtins: importable and
+ * testable without the pi host. Contract: README.md.
  */
 
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
-
-export const DEFAULT_DEADLINE_SEC = 900;
-export const KILL_GRACE_MS = 5000;
+import { type LaneEvent, type StreamMessage, assistantMessageEnd, messageText, parseEvents } from "./events.ts";
 
 export type LaneRecord = {
 	name: string;
@@ -34,13 +33,18 @@ export type Manifest = {
 	lanes: LaneRecord[];
 };
 
+export type LaneFailureCause = "spawn" | "killed" | "deadline" | "crashed";
+
+export type Usage = { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number };
+
 export type LaneStatus = {
 	name: string;
 	state: "starting" | "running" | "settled" | "failed";
-	cause?: "spawn" | "killed" | "deadline" | "crashed";
+	cause?: LaneFailureCause;
+	/** Set while a lane is alive past its deadline (leash misfire) — informational. */
 	overdue?: boolean;
 	turns: number;
-	usage: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number };
+	usage: Usage;
 	stopReason?: string;
 	lastEventAgeSec: number | null;
 	spawnError?: string;
@@ -49,16 +53,19 @@ export type LaneStatus = {
 
 // --- manifest --------------------------------------------------------------
 
+/** Path of a wave's manifest inside its workDir. */
 export function manifestPathFor(workDir: string, wave: string): string {
 	return path.join(workDir, `${wave}-manifest.json`);
 }
 
+/** Read and parse a wave manifest; throws with the path when absent or invalid. */
 export function readManifest(workDir: string, wave: string): Manifest {
 	const p = manifestPathFor(workDir, wave);
 	if (!fs.existsSync(p)) throw new Error(`unknown wave '${wave}' (no manifest at ${p})`);
 	return JSON.parse(fs.readFileSync(p, "utf8")) as Manifest;
 }
 
+/** Atomically replace a wave manifest (pid-suffixed tmp, same-fs rename). */
 export function writeManifestAtomic(m: Manifest): void {
 	const p = manifestPathFor(m.workDir, m.wave);
 	const tmp = `${p}.${process.pid}.tmp`;
@@ -68,6 +75,7 @@ export function writeManifestAtomic(m: Manifest): void {
 
 // --- process liveness ------------------------------------------------------
 
+/** Process start-time per `ps -o lstart=`; empty string means the pid is dead. */
 export function psLstart(pid: number): string {
 	try {
 		return execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8" }).trim();
@@ -87,32 +95,14 @@ export function pidAlive(pid: number, expectedStart: string | null): boolean {
 		// EPERM: exists but not signalable — fall through to the start-time check
 	}
 	if (expectedStart === null) return reachable;
-	const actual = psLstart(pid); // empty output = dead
+	const actual = psLstart(pid);
 	return actual !== "" && actual === expectedStart;
 }
 
-// --- event parsing ---------------------------------------------------------
+// --- state derivation ------------------------------------------------------
 
-/**
- * Parse a lane's JSONL event stream. A trailing line lacking its newline is a
- * SIGTERM-truncated write and is skipped; any other unparseable line is
- * corruption and throws.
- */
-export function parseEvents(eventsPath: string): any[] {
-	if (!fs.existsSync(eventsPath)) return [];
-	const raw = fs.readFileSync(eventsPath, "utf8");
-	if (raw === "") return [];
-	const lines = raw.endsWith("\n") ? raw.slice(0, -1).split("\n") : raw.split("\n").slice(0, -1);
-	const events: any[] = [];
-	for (let i = 0; i < lines.length; i++) {
-		if (lines[i] === "") continue;
-		try {
-			events.push(JSON.parse(lines[i]));
-		} catch (e: any) {
-			throw new Error(`corrupt event line ${i + 1} in ${eventsPath}: ${e.message}`);
-		}
-	}
-	return events;
+function emptyUsage(): Usage {
+	return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
 }
 
 function errTailFor(lane: LaneRecord): string | undefined {
@@ -121,15 +111,13 @@ function errTailFor(lane: LaneRecord): string | undefined {
 	return err === "" ? undefined : err.split("\n").slice(-5).join("\n");
 }
 
-// --- state derivation ------------------------------------------------------
-
 /** Derive a lane's status from its events file, PID liveness, and manifest facts. Never stored. */
 export function deriveLane(lane: LaneRecord, now: number): LaneStatus {
 	const base: LaneStatus = {
 		name: lane.name,
 		state: "failed",
 		turns: 0,
-		usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
+		usage: emptyUsage(),
 		lastEventAgeSec: null,
 	};
 
@@ -138,14 +126,15 @@ export function deriveLane(lane: LaneRecord, now: number): LaneStatus {
 	const events = parseEvents(lane.eventsPath);
 	for (const e of events) {
 		if (e.type === "turn_start") base.turns++;
-		if (e.type === "message_end" && e.message?.role === "assistant") {
-			const u = e.message.usage ?? {};
+		const message = assistantMessageEnd(e);
+		if (message !== null) {
+			const u = message.usage ?? {};
 			base.usage.input += u.input ?? 0;
 			base.usage.output += u.output ?? 0;
 			base.usage.cacheRead += u.cacheRead ?? 0;
 			base.usage.cacheWrite += u.cacheWrite ?? 0;
 			base.usage.cost += u.cost?.total ?? 0;
-			if (typeof e.message.stopReason === "string") base.stopReason = e.message.stopReason;
+			if (typeof message.stopReason === "string") base.stopReason = message.stopReason;
 		}
 	}
 	if (fs.existsSync(lane.eventsPath)) {
@@ -171,47 +160,13 @@ export function deriveLane(lane: LaneRecord, now: number): LaneStatus {
 }
 
 /** Final assistant message text (concatenated text blocks of the last assistant message_end). */
-export function finalAssistantText(events: any[]): string {
+export function finalAssistantText(events: LaneEvent[]): string {
 	let text = "";
 	for (const e of events) {
-		if (e.type === "message_end" && e.message?.role === "assistant") {
-			const blocks = Array.isArray(e.message.content) ? e.message.content : [];
-			text = blocks
-				.filter((b: any) => b.type === "text" && typeof b.text === "string")
-				.map((b: any) => b.text)
-				.join("\n");
-		}
+		const message = assistantMessageEnd(e);
+		if (message !== null) text = messageText(message);
 	}
 	return text;
 }
 
-// --- presentation ----------------------------------------------------------
-
-export function formatLaneLine(s: LaneStatus): string {
-	const bits = [s.name, s.state];
-	if (s.cause) bits.push(`(${s.cause}${s.spawnError ? `: ${s.spawnError}` : ""})`);
-	if (s.overdue) bits.push("OVERDUE");
-	bits.push(`${s.turns} turns`);
-	bits.push(`tok ${s.usage.input}in/${s.usage.output}out, $${s.usage.cost.toFixed(4)}`);
-	if (s.stopReason !== undefined) bits.push(`stop:${s.stopReason}`);
-	if (s.lastEventAgeSec !== null) bits.push(`last ${s.lastEventAgeSec}s ago`);
-	return `  ${bits.join(" · ")}` + (s.errTail ? `\n    err: ${s.errTail.replace(/\n/g, "\n    ")}` : "");
-}
-
-export function formatWaveStatus(wave: string, statuses: LaneStatus[]): string {
-	return `wave '${wave}':\n${statuses.map(formatLaneLine).join("\n")}`;
-}
-
-/** Footer summary across tracked waves; undefined when nothing is in flight — clear the status entry. */
-export function formatStatusBarSummary(statuses: LaneStatus[]): string | undefined {
-	let running = 0;
-	const done: Record<string, number> = {};
-	for (const s of statuses) {
-		if (s.state === "running" || s.state === "starting") running++;
-		else done[s.state] = (done[s.state] ?? 0) + 1;
-	}
-	if (running === 0) return undefined;
-	const parts = [`${running} running`];
-	for (const [k, v] of Object.entries(done).sort()) if (v > 0) parts.push(`${v} ${k}`);
-	return `lanes: ${parts.join(" · ")}`;
-}
+export { parseEvents };

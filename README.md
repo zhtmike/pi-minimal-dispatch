@@ -33,9 +33,10 @@ lane emits a structured event stream, and state is *derived* from evidence.
 - **macOS or Linux** — Windows is not supported (the extension relies on POSIX
   process groups, `ps`, and `timeout`)
 - GNU `timeout`: preinstalled on Linux; on macOS install it with
-  `brew install coreutils` (the `timeout` binary must be on `PATH`)
+  `brew install coreutils` (or configure `timeoutBin: "gtimeout"` — see
+  [Configuration](#configuration))
 - `ps` with `-o lstart=` (procps on Linux, built-in on macOS): standard on both
-- Lanes resolve `pi` from the dispatcher's `PATH`
+- Lanes resolve the pi binary from the dispatcher's `PATH` (configurable)
 
 ## Install
 
@@ -57,67 +58,114 @@ Poll them and collect the artifacts when they settle.
 pi decides when to call the tools. The ceremony is:
 *write briefs → `dispatch` → poll `lanes status` → `collect` → clean up*.
 
-## The tools
+## API
 
 ### `dispatch`
 
-```json
-{
-  "wave": "survey",
-  "lanes": [
-    { "name": "docs",   "briefPath": ".pi/work/survey-docs-brief.md",
-      "model": "zai/glm-5.3-flash", "deadlineSec": 600 },
-    { "name": "review", "briefPath": ".pi/work/survey-review-brief.md",
-      "deadlineSec": 900, "tools": "read,grep,find,ls,bash", "noExtensions": true }
-  ],
-  "workDir": ".pi/work"
-}
-```
+Spawns a wave and returns in under a second. Lanes run
+`<timeoutBin> <deadlineSec> <piBin> --mode json --no-session -ns [flags] @<brief>`
+detached, events streaming to `<workDir>/<wave>-<name>.events.jsonl`.
 
-- Validates every brief and every slug **before** spawning: a typo'd brief or
-  malformed slug fails synchronously with zero lanes spawned.
-- Claims the wave slug atomically — reusing a wave name, or two concurrent
-  dispatches of the same wave, fail loudly instead of clobbering.
-- Spawns each lane detached in its own process group and returns in under a
-  second. The dispatcher stays free; lanes survive its exit.
-- Per-lane options: `model`, `deadlineSec` (default 900), `tools` (allowlist),
-  `noExtensions` (pass `-ne`), `mcp: false` (pass `--no-mcp`).
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `wave` | string | — | Wave slug: `kebab-case`, max 64 chars, must not exist in `workDir` |
+| `lanes` | array | — | One entry per lane (min 1); lane slugs unique within the wave |
+| `lanes[].name` | string | — | Lane slug: `kebab-case`, max 64 chars |
+| `lanes[].briefPath` | string | — | Path to the lane's brief file (its `@file` prompt) |
+| `lanes[].model` | string? | inherit | Pin a model id for this lane |
+| `lanes[].deadlineSec` | number? | `deadlineSec` config (900) | Leash in seconds; holds even if the dispatcher is gone. Minimum 1 |
+| `lanes[].tools` | string? | all tools | Tool allowlist for `--tools`, e.g. `"read,grep,find,ls,bash"` |
+| `lanes[].noExtensions` | boolean? | false | Pass `-ne` (drop extensions incl. MCP in the lane) |
+| `lanes[].mcp` | boolean? | true | Set `false` to pass `--no-mcp` |
+| `workDir` | string? | `workDir` config (`.pi/work`) | Directory for manifest, events, and artifacts |
+
+**Result:** text summary plus `structuredContent` — `{ wave, manifestPath, lanes[] }`
+with each lane's pid, paths, and deadline. Spawned lanes stream events
+immediately; a lane that failed to spawn appears as `SPAWN ERROR: …`.
+
+**Errors** (the whole call fails, zero lanes spawned, no slug claimed):
+a brief file missing (all missing paths listed) · malformed or duplicate slugs ·
+wave slug already exists · `timeoutBin`/`piBin` not found on `PATH`.
 
 ### `lanes`
 
 Stateless: every call reads the manifest fresh, so any session — including a
 fresh one after the dispatcher exited — sees the same truth.
 
-- **`status`** (default) — per lane: derived state, turns, run-total token
-  usage and cost, `stopReason`, last-event age, `.err` tail for crashed lanes.
-- **`kill`** — SIGTERM the lane's process group, SIGKILL after a 5 s grace;
-  start-time guarded so a reused PID is never signaled; records a tombstone.
-- **`collect`** — write each finished lane's final assistant message to
-  `<wave>-<name>.md`, suspect-flagged when the lane failed, its final message
-  is empty, or the stop reason was not clean. Refuses lanes still running or
-  never spawned.
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `wave` | string | — | Wave slug |
+| `action` | string? | `"status"` | `"status"` \| `"kill"` \| `"collect"` |
+| `workDir` | string? | `workDir` config (`.pi/work`) | Directory holding the manifest |
+
+**`status`** — per-lane `structuredContent` entries:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `name` | string | lane slug |
+| `state` | string | `starting` \| `running` \| `settled` \| `failed` |
+| `cause` | string? | for `failed`: `spawn` · `killed` · `deadline` · `crashed` |
+| `overdue` | boolean? | alive past its deadline (leash misfire) — informational |
+| `turns` | number | turn count so far |
+| `usage` | object | run totals summed over assistant messages: `{input, output, cacheRead, cacheWrite, cost}` |
+| `stopReason` | string? | last assistant stop reason (`stop` is clean) |
+| `lastEventAgeSec` | number? | seconds since the events file last grew — the stuck-lane signal |
+| `spawnError` | string? | why a `spawn`-failed lane never started |
+| `errTail` | string? | last lines of `.err` for `crashed` lanes |
+
+**`kill`** — SIGTERM to each eligible lane's process group (never a
+start-time-mismatched/reused PID; settled lanes skipped), SIGKILL after the
+`killGraceMs` config grace, then a manifest tombstone so the kill survives
+re-adoption. Idempotent; honors tool-call cancellation during the grace wait.
+
+**`collect`** — for each finished lane, writes the final assistant message
+(text blocks concatenated) to `<wave>-<name>.md`. Entries carry
+`{ name, artifact, suspect, stopReason }`; `suspect: true` when the lane
+failed, the message is empty, or the stop reason was not clean. Refuses lanes
+still running or never spawned.
+
+## Configuration
+
+All knobs are configurable — nothing is hardcoded. JSON files, later wins:
+
+1. defaults (documented in the tables above)
+2. `<agent-dir>/pi-minimal-dispatch.json` — user level (`~/.pi/agent`, or `$PI_CODING_AGENT_DIR`)
+3. `.pi/pi-minimal-dispatch.json` — project level (working directory)
+4. per-call tool parameters
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `workDir` | string | `.pi/work` | Default wave directory |
+| `deadlineSec` | number | `900` | Default lane leash (integer ≥ 1) |
+| `killGraceMs` | number | `5000` | SIGTERM→SIGKILL grace in the `kill` action (integer ≥ 100) |
+| `pollMs` | number | `2000` | Statusbar poll interval (integer ≥ 100) |
+| `piBin` | string | `"pi"` | Lane pi binary, resolved from `PATH` |
+| `timeoutBin` | string | `"timeout"` | Leash binary — set `"gtimeout"` if coreutils isn't linked on macOS |
+
+```json
+{
+	"deadlineSec": 600,
+	"timeoutBin": "gtimeout"
+}
+```
+
+Invalid files fail loudly at the next tool call: the error names the file and
+the valid keys/values. Unknown keys are rejected.
 
 ## Status bar & `/lanes`
 
 While any tracked lane runs, the footer shows one line — e.g. `lanes: 2 running · 1 settled`
-— and clears itself when nothing is in flight. `/lanes` (optionally `/lanes <wave>`)
-prints the full status table for waves seen this session — an untracked wave name is
-resolved from the default workDir — and completes wave names. Both are TUI conveniences
-over the same derived state the `lanes` tool reports.
+— updated at the `pollMs` cadence and cleared when nothing is in flight.
+`/lanes` (optionally `/lanes <wave>`) prints the full status table for waves
+seen this session — an untracked wave name is resolved from the default
+workDir — and completes wave names. Both are TUI conveniences over the same
+derived state the `lanes` tool reports.
 
-## How it works
+## State model
 
-- **Lane**: `timeout <deadlineSec> pi --mode json --no-session -ns [flags] @<brief>`,
-  spawned detached via an argv array (no `sh -c` wrapper to mangle); events
-  stream to `<workDir>/<wave>-<name>.events.jsonl`. The `timeout` wrapper is
-  the deadline leash — it holds even if the dispatcher is gone.
-- **Registry**: `<workDir>/<wave>-manifest.json`, created atomically (`wx`).
-  Plain JSON on disk: pids, process start-times, deadlines, brief paths —
-  everything a later session needs to re-adopt the wave. The extension never
-  deletes anything; cleanup stays an explicit step.
-- **State**: derived on every call from the event stream, PID liveness
-  (guarded by process start-time), and the deadline. Never stored, never
-  stale.
+Each lane's status is derived on every call from its event stream, PID
+liveness (guarded by process start-time — a reused PID is never signaled),
+and the deadline. Never stored, never stale:
 
 | State | Meaning |
 |---|---|
@@ -126,11 +174,24 @@ over the same derived state the `lanes` tool reports.
 | `settled` | `agent_settled` emitted — final message available |
 | `failed` | cause: `spawn` (synchronous, nothing ran) · `killed` (tombstoned) · `deadline` (leash fired, even parentless) · `crashed` (`.err` tail attached) |
 
+## How it works
+
+- **Lane**: detached via an argv array (no `sh -c` wrapper to mangle) in its
+  own process group; the `timeout` wrapper is the deadline leash.
+- **Registry**: `<workDir>/<wave>-manifest.json`, created atomically (`wx` —
+  slug collisions and concurrent same-wave dispatches fail loudly). Plain
+  JSON on disk: pids, process start-times, deadlines, brief paths — everything
+  a later session needs to re-adopt the wave. The extension never deletes
+  wave artifacts; cleanup stays an explicit step.
+- **State**: derived on every call — never stored, never stale.
+
 ## Testing
 
 ```bash
-node tests/derive.test.ts   # unit: derivation rules (cheap CPU, no model calls)
-bash tests/prove.sh         # integration: replays a live wave (bills models)
+node tests/config.test.ts    # configuration precedence + validation
+node tests/derive.test.ts    # state derivation, liveness guard, event parsing
+node tests/format.test.ts    # presentation formatters
+bash tests/prove.sh          # integration: replays a live wave (bills models)
 ```
 
 ## Contributing

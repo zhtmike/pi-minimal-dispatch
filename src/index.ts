@@ -2,6 +2,7 @@
  * pi-minimal-dispatch — detached lane dispatch with visible state (README.md).
  * `dispatch`: spawn a wave of detached `timeout … pi --mode json …` lanes, return immediately.
  * `lanes`: stateless status/kill/collect over the wave's manifest + event streams.
+ * All knobs are configurable (README.md → Configuration); nothing is hardcoded.
  */
 
 import { spawn } from "node:child_process";
@@ -9,16 +10,13 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { StringEnum, Type } from "@earendil-works/pi-ai";
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { type DispatchConfig, loadConfig } from "./config.ts";
 import {
-	DEFAULT_DEADLINE_SEC,
-	KILL_GRACE_MS,
 	type LaneRecord,
 	type LaneStatus,
 	type Manifest,
 	deriveLane,
 	finalAssistantText,
-	formatStatusBarSummary,
-	formatWaveStatus,
 	manifestPathFor,
 	parseEvents,
 	pidAlive,
@@ -26,6 +24,7 @@ import {
 	readManifest,
 	writeManifestAtomic,
 } from "./derive.ts";
+import { formatStatusBarSummary, formatWaveStatus } from "./format.ts";
 
 function resolveExecutable(name: string): string {
 	for (const dir of (process.env.PATH ?? "").split(path.delimiter)) {
@@ -43,60 +42,7 @@ function resolveExecutable(name: string): string {
 
 const SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
-// --- statusbar tracking (in-memory cache; manifest and event files stay authoritative) ---
-
-const STATUS_KEY = "pi-minimal-dispatch";
-const POLL_MS = 2000;
-
-type UiCtx = { mode: string; ui: { setStatus(key: string, text: string | undefined): void } };
-
-const tracked = new Map<string, string>(); // wave -> workDir
-let pollTimer: ReturnType<typeof setInterval> | null = null;
-let uiCtx: UiCtx | null = null;
-
-function statusBarTick(): void {
-	const ctx = uiCtx;
-	if (ctx === null) return;
-	const all: LaneStatus[] = [];
-	for (const [wave, workDir] of tracked) {
-		if (!fs.existsSync(manifestPathFor(workDir, wave))) {
-			tracked.delete(wave); // the wave was cleaned up
-			continue;
-		}
-		try {
-			const m = readManifest(workDir, wave);
-			all.push(...m.lanes.map((l) => deriveLane(l, Date.now())));
-		} catch {
-			// corrupt manifest/events: skipped this tick — /lanes and the lanes tool surface the error loudly
-		}
-	}
-	const summary = formatStatusBarSummary(all);
-	if (summary === undefined) {
-		ctx.ui.setStatus(STATUS_KEY, undefined);
-		stopPolling();
-	} else {
-		ctx.ui.setStatus(STATUS_KEY, summary);
-	}
-}
-
-function armPolling(): void {
-	if (pollTimer === null && tracked.size > 0 && uiCtx !== null && (uiCtx.mode === "tui" || uiCtx.mode === "rpc")) {
-		pollTimer = setInterval(statusBarTick, POLL_MS);
-	}
-}
-
-function trackWave(wave: string, workDir: string): void {
-	tracked.set(wave, workDir);
-	armPolling();
-}
-
-function stopPolling(): void {
-	if (pollTimer !== null) {
-		clearInterval(pollTimer);
-		pollTimer = null;
-	}
-}
-
+/** Validate wave and lane slugs: kebab-case, max 64 chars, unique within the call. */
 function assertSlugs(wave: string, names: string[]): void {
 	const bad: string[] = [];
 	if (!SLUG.test(wave)) bad.push(`wave '${wave}'`);
@@ -104,6 +50,65 @@ function assertSlugs(wave: string, names: string[]): void {
 	const dupes = names.filter((n, i) => names.indexOf(n) !== i);
 	for (const d of new Set(dupes)) bad.push(`duplicate lane '${d}'`);
 	if (bad.length > 0) throw new Error(`slugs must be kebab-case [a-z0-9-], max 64 chars, unique: ${bad.join(", ")}`);
+}
+
+/** Spawn one lane detached; a failure at any step becomes the record's spawnError, never a throw. */
+function spawnLane(workDir: string, wave: string, lane: { name: string; briefPath: string; model?: string; deadlineSec?: number; tools?: string; noExtensions?: boolean; mcp?: boolean }, cfg: DispatchConfig): LaneRecord {
+	const briefPath = path.resolve(lane.briefPath);
+	const record: LaneRecord = {
+		name: lane.name,
+		briefPath,
+		eventsPath: path.join(workDir, `${wave}-${lane.name}.events.jsonl`),
+		errPath: path.join(workDir, `${wave}-${lane.name}.err`),
+		pid: null,
+		processStart: null,
+		startedAt: new Date().toISOString(),
+		deadlineSec: lane.deadlineSec ?? cfg.deadlineSec,
+		model: lane.model,
+		tools: lane.tools,
+		spawned: false,
+	};
+
+	let outFd = -1;
+	let errFd = -1;
+	try {
+		outFd = fs.openSync(record.eventsPath, "w");
+		errFd = fs.openSync(record.errPath, "w");
+		const args = [
+			String(record.deadlineSec),
+			cfg.piBin,
+			"--mode",
+			"json",
+			"--no-session",
+			"-ns",
+			...(lane.noExtensions ? ["-ne"] : []),
+			...(lane.tools ? ["--tools", lane.tools] : []),
+			...(lane.mcp === false ? ["--no-mcp"] : []),
+			...(lane.model ? ["--model", lane.model] : []),
+			`@${briefPath}`,
+		];
+		const child = spawn(cfg.timeoutBin, args, {
+			detached: true, // own process group; survives this process's exit
+			stdio: ["ignore", outFd, errFd],
+			env: process.env,
+		});
+		child.unref();
+		child.on("error", (e) => {
+			// Async spawn failure lands after we returned; the cause goes to .err
+			try {
+				fs.appendFileSync(record.errPath, `\n[pi-minimal-dispatch] spawn error: ${e.message}\n`);
+			} catch {}
+		});
+		record.pid = child.pid;
+		record.processStart = psLstart(child.pid!);
+		record.spawned = true;
+	} catch (e: any) {
+		record.spawnError = e.message;
+	} finally {
+		if (outFd !== -1) fs.closeSync(outFd);
+		if (errFd !== -1) fs.closeSync(errFd);
+	}
+	return record;
 }
 
 const dispatchTool = defineTool({
@@ -116,24 +121,25 @@ const dispatchTool = defineTool({
 		"session's exit. Write briefs first (one file per lane, addressee = dispatched leaf). " +
 		"Then poll with the lanes tool; collect artifacts when settled.",
 	parameters: Type.Object({
-		wave: Type.String({ description: "Wave slug (kebab-case); must not already exist in workDir" }),
+		wave: Type.String({ description: "Wave slug (kebab-case, max 64 chars); must not already exist in workDir" }),
 		lanes: Type.Array(
 			Type.Object({
-				name: Type.String({ description: "Lane slug (kebab-case, unique within the wave)" }),
+				name: Type.String({ description: "Lane slug (kebab-case, max 64 chars, unique within the wave)" }),
 				briefPath: Type.String({ description: "Path to the lane's brief file (@file prompt)" }),
 				model: Type.Optional(Type.String({ description: "Pin a model id for this lane" })),
-				deadlineSec: Type.Optional(Type.Number({ description: `Deadline leash in seconds (default ${DEFAULT_DEADLINE_SEC})`, minimum: 1 })),
+				deadlineSec: Type.Optional(Type.Number({ description: "Deadline leash in seconds (config default: 900)", minimum: 1 })),
 				tools: Type.Optional(Type.String({ description: "Tool allowlist passed to --tools, e.g. 'read,grep,find,ls,bash'" })),
 				noExtensions: Type.Optional(Type.Boolean({ description: "Pass -ne (drop extensions incl. MCP)" })),
 				mcp: Type.Optional(Type.Boolean({ description: "Set false to pass --no-mcp (default: MCP reachable per exposure)" })),
 			}),
 			{ minItems: 1 },
 		),
-		workDir: Type.Optional(Type.String({ description: "Directory for briefs/events/manifest (default .pi/work)" })),
+		workDir: Type.Optional(Type.String({ description: "Directory for briefs/events/manifest (config default: .pi/work)" })),
 	}),
 
 	async execute(_id, params) {
-		const workDir = path.resolve(params.workDir ?? ".pi/work");
+		const cfg = loadConfig();
+		const workDir = path.resolve(params.workDir ?? cfg.workDir);
 		fs.mkdirSync(workDir, { recursive: true });
 		// Slugs are validated before the manifest claim: a post-claim throw would strand the slug.
 		assertSlugs(params.wave, params.lanes.map((l) => l.name));
@@ -160,8 +166,8 @@ const dispatchTool = defineTool({
 
 		let timeoutBin: string;
 		try {
-			timeoutBin = resolveExecutable("timeout");
-			resolveExecutable("pi");
+			timeoutBin = resolveExecutable(cfg.timeoutBin);
+			resolveExecutable(cfg.piBin);
 		} catch (e) {
 			fs.closeSync(claimFd);
 			fs.unlinkSync(manifestPath);
@@ -175,65 +181,8 @@ const dispatchTool = defineTool({
 			createdAt: new Date().toISOString(),
 			lanes: [],
 		};
-
 		for (const lane of params.lanes) {
-			const briefPath = path.resolve(lane.briefPath);
-			const eventsPath = path.join(workDir, `${params.wave}-${lane.name}.events.jsonl`);
-			const errPath = path.join(workDir, `${params.wave}-${lane.name}.err`);
-			const record: LaneRecord = {
-				name: lane.name,
-				briefPath,
-				eventsPath,
-				errPath,
-				pid: null,
-				processStart: null,
-				startedAt: new Date().toISOString(),
-				deadlineSec: lane.deadlineSec ?? DEFAULT_DEADLINE_SEC,
-				model: lane.model,
-				tools: lane.tools,
-				spawned: false,
-			};
-
-			let outFd = -1;
-			let errFd = -1;
-			try {
-				outFd = fs.openSync(eventsPath, "w");
-				errFd = fs.openSync(errPath, "w");
-				const args = [
-					String(record.deadlineSec),
-					"pi",
-					"--mode",
-					"json",
-					"--no-session",
-					"-ns",
-					...(lane.noExtensions ? ["-ne"] : []),
-					...(lane.tools ? ["--tools", lane.tools] : []),
-					...(lane.mcp === false ? ["--no-mcp"] : []),
-					...(lane.model ? ["--model", lane.model] : []),
-					`@${briefPath}`,
-				];
-				const child = spawn(timeoutBin, args, {
-					detached: true, // own process group; survives this process's exit
-					stdio: ["ignore", outFd, errFd],
-					env: process.env,
-				});
-				child.unref();
-				child.on("error", (e) => {
-					// Async spawn failure lands after we returned; the cause goes to .err
-					try {
-						fs.appendFileSync(errPath, `\n[pi-minimal-dispatch] spawn error: ${e.message}\n`);
-					} catch {}
-				});
-				record.pid = child.pid;
-				record.processStart = psLstart(child.pid!);
-				record.spawned = true;
-			} catch (e: any) {
-				record.spawnError = e.message;
-			} finally {
-				if (outFd !== -1) fs.closeSync(outFd);
-				if (errFd !== -1) fs.closeSync(errFd);
-			}
-			manifest.lanes.push(record);
+			manifest.lanes.push(spawnLane(workDir, params.wave, lane, { ...cfg, timeoutBin }));
 		}
 
 		try {
@@ -254,7 +203,6 @@ const dispatchTool = defineTool({
 			fs.unlinkSync(manifestPath);
 			throw e;
 		}
-
 		trackWave(params.wave, workDir);
 
 		const lines = manifest.lanes.map(
@@ -281,17 +229,18 @@ const lanesTool = defineTool({
 		"Observe/control a dispatched wave. action=status (default): per-lane derived state " +
 		"(starting/running/settled/failed + cause spawn|killed|deadline|crashed), turns, run-total usage, " +
 		"stopReason, last-event age, .err tail for crashed lanes. action=kill: SIGTERM the lane process group " +
-		"(SIGKILL after grace), start-time guarded. action=collect: write each finished lane's final assistant " +
-		"message to <wave>-<name>.md (suspect-flagged on non-clean stopReason). Stateless: reads the manifest " +
+		"(SIGKILL after the configured grace), start-time guarded. action=collect: write each finished lane's final assistant " +
+		"message to <wave>-<name>.md (suspect-flagged on failure/empty/non-clean stopReason). Stateless: reads the manifest " +
 		"fresh — works across sessions, including after the dispatcher exited.",
 	parameters: Type.Object({
 		wave: Type.String({ description: "Wave slug" }),
 		action: Type.Optional(StringEnum(["status", "kill", "collect"])),
-		workDir: Type.Optional(Type.String({ description: "Directory holding the manifest (default .pi/work)" })),
+		workDir: Type.Optional(Type.String({ description: "Directory holding the manifest (config default: .pi/work)" })),
 	}),
 
 	async execute(_id, params, signal) {
-		const workDir = path.resolve(params.workDir ?? ".pi/work");
+		const cfg = loadConfig();
+		const workDir = path.resolve(params.workDir ?? cfg.workDir);
 		const action = params.action ?? "status";
 		const manifest = readManifest(workDir, params.wave);
 		trackWave(params.wave, workDir);
@@ -327,7 +276,7 @@ const lanesTool = defineTool({
 				throw e;
 			}
 			if (killed.length > 0) {
-				const deadline = Date.now() + KILL_GRACE_MS;
+				const deadline = Date.now() + cfg.killGraceMs;
 				while (Date.now() < deadline) {
 					if (signal?.aborted) break;
 					await new Promise((r) => setTimeout(r, 200));
@@ -389,6 +338,59 @@ const lanesTool = defineTool({
 	},
 });
 
+// --- statusbar tracking (in-memory cache; manifest and event files stay authoritative) ---
+
+const STATUS_KEY = "pi-minimal-dispatch";
+
+type UiCtx = { mode: string; ui: { setStatus(key: string, text: string | undefined): void } };
+
+const tracked = new Map<string, string>(); // wave -> workDir
+let pollTimer: ReturnType<typeof setInterval> | null = null;
+let uiCtx: UiCtx | null = null;
+
+function statusBarTick(): void {
+	const ctx = uiCtx;
+	if (ctx === null) return;
+	const all: LaneStatus[] = [];
+	for (const [wave, workDir] of tracked) {
+		if (!fs.existsSync(manifestPathFor(workDir, wave))) {
+			tracked.delete(wave); // the wave was cleaned up
+			continue;
+		}
+		try {
+			const m = readManifest(workDir, wave);
+			all.push(...m.lanes.map((l) => deriveLane(l, Date.now())));
+		} catch {
+			// corrupt manifest/events: skipped this tick — /lanes and the lanes tool surface the error loudly
+		}
+	}
+	const summary = formatStatusBarSummary(all);
+	if (summary === undefined) {
+		ctx.ui.setStatus(STATUS_KEY, undefined);
+		stopPolling();
+	} else {
+		ctx.ui.setStatus(STATUS_KEY, summary);
+	}
+}
+
+function armPolling(): void {
+	if (pollTimer === null && tracked.size > 0 && uiCtx !== null && (uiCtx.mode === "tui" || uiCtx.mode === "rpc")) {
+		pollTimer = setInterval(statusBarTick, loadConfig().pollMs);
+	}
+}
+
+function trackWave(wave: string, workDir: string): void {
+	tracked.set(wave, workDir);
+	armPolling();
+}
+
+function stopPolling(): void {
+	if (pollTimer !== null) {
+		clearInterval(pollTimer);
+		pollTimer = null;
+	}
+}
+
 export default function (pi: ExtensionAPI) {
 	pi.registerTool(dispatchTool);
 	pi.registerTool(lanesTool);
@@ -428,7 +430,7 @@ export default function (pi: ExtensionAPI) {
 					}
 					return;
 				}
-				show(wave, tracked.get(wave) ?? path.resolve(".pi/work"));
+				show(wave, tracked.get(wave) ?? path.resolve(loadConfig().workDir));
 			} catch (e: any) {
 				ctx.ui.notify(e.message, "error");
 			}

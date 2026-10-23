@@ -9,8 +9,8 @@ working rules before proposing changes.
 ```bash
 git clone https://github.com/zhtmike/pi-minimal-dispatch
 cd pi-minimal-dispatch
-node tests/derive.test.ts    # unit tests — no dependencies, no model calls
-pi -e ./src/index.ts         # load the extension for one session
+for t in tests/*.test.ts; do node "$t"; done   # unit tests — no dependencies, no model calls
+pi -e ./src/index.ts                            # load the extension for one session
 ```
 
 Integration proof (`bash tests/prove.sh`) spawns a real pi lane and bills a

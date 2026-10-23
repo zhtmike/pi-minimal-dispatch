@@ -12,11 +12,12 @@ them; fix the disagreement, not just the code.
 
 ## Layout
 
-- `src/index.ts` — tool definitions, detached spawning, kill/collect actions
-- `src/derive.ts` — manifest + event-stream parsing + state derivation; pure
-  Node builtins, importable without the pi host (unit tests rely on this)
-- `tests/derive.test.ts` — plain `node` script, no framework
-- `tests/prove.sh` — live integration replay (bills models; `PI_BIN` override)
+- `src/index.ts` — tool definitions, detached spawning, kill/collect actions, statusbar + `/lanes`
+- `src/config.ts` — configuration: defaults, user/project file merge, validation
+- `src/events.ts` — typed lane event-stream parsing (`pi --mode json` JSONL)
+- `src/derive.ts` — manifest registry, process liveness, state derivation; pure Node builtins, importable without the pi host
+- `src/format.ts` — presentation formatters shared by tool, command, and statusbar
+- `tests/*.test.ts` — plain `node` scripts, no framework; `tests/prove.sh` — live integration replay (`PI_BIN` override)
 
 ## Working rules
 
@@ -32,14 +33,16 @@ them; fix the disagreement, not just the code.
   signaled (start-time guard in `pidAlive`).
 - Tabs for indentation; WHY-comments only, two lines max; no PR/issue
   citations in comments.
-- Every behavior change ships with a unit test in the same change; run
-  `node tests/derive.test.ts` before declaring done.
+- Every behavior change ships with a unit test in the same change; run all
+  `tests/*.test.ts` before declaring done.
 
 ## Testing
 
 ```bash
-node tests/derive.test.ts    # must pass; cheap CPU, no model calls
-bash tests/prove.sh          # live wave; requires pi >= 1.4.0 and GNU timeout
+node tests/config.test.ts     # must pass; cheap CPU, no model calls
+node tests/derive.test.ts     # must pass
+node tests/format.test.ts     # must pass
+bash tests/prove.sh           # live wave; requires pi >= 1.4.0 and GNU timeout
 ```
 
 The pi host API surface used here (`defineTool`, `Type`, `StringEnum`,
