@@ -12,5 +12,8 @@ Initial release.
   event streams — derived state with failure causes, start-time-guarded PID
   liveness, TERM→KILL group kill with tombstones, and suspect-flagged
   artifact collection.
+- Safe defaults: lanes run read-only (`read,grep,find,ls`) unless granted
+  more via `tools`, never load skills (`-ns`), and never receive the
+  `dispatch` tool themselves (child marker).
 - Statusbar line and `/lanes` command (TUI/RPC modes).
 - Configuration: user/project JSON files with per-call parameter precedence.

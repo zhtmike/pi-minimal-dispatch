@@ -63,7 +63,8 @@ export function resolveExecutable(name: string): string {
  * --no-session -ns [flags] @<brief>`. The json/no-session/-ns triple is the
  * fixed lane protocol (lanes never load skills); everything variable is a
  * parameter or config knob. `-k` escalates a caught SIGTERM to SIGKILL so a
- * stalled dispose cannot outlive the leash.
+ * stalled dispose cannot outlive the leash. Omitted `tools` defaults to a
+ * read-only allowlist — a lane must be granted `bash`/`edit`/`write` explicitly.
  */
 export function buildLaneArgs(lane: LaneParams, cfg: Pick<DispatchConfig, "piBin">, deadlineSec: number, killGraceSec: number): string[] {
 	return [
@@ -76,11 +77,21 @@ export function buildLaneArgs(lane: LaneParams, cfg: Pick<DispatchConfig, "piBin
 		"--no-session",
 		"-ns",
 		...(lane.noExtensions ? ["-ne"] : []),
-		...(lane.tools ? ["--tools", lane.tools] : []),
+		"--tools",
+		lane.tools ?? "read,grep,find,ls",
 		...(lane.mcp === false ? ["--no-mcp"] : []),
 		...(lane.model ? ["--model", lane.model] : []),
 		`@${path.resolve(lane.briefPath)}`,
 	];
+}
+
+/**
+ * Child env: marks the process as a dispatched lane so this extension's
+ * factory stays out of it — a lane never gets the `dispatch` tool again.
+ * `-ne` remains the switch that drops all extensions.
+ */
+export function laneEnv(): NodeJS.ProcessEnv {
+	return { ...process.env, PI_MINIMAL_DISPATCH_CHILD: "1" };
 }
 
 /** Lanes eligible for a kill signal: spawned, alive by the caller's check, not settled. */

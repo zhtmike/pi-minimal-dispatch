@@ -22,7 +22,7 @@ the leash. Events stream to `<workDir>/<wave>-<name>.events.jsonl`.
 | `lanes[].briefPath` | string | — | Path to the lane's brief file (its `@file` prompt) |
 | `lanes[].model` | string? | pi default | Pin a model id; omitted: pi's **configured default model** — not the dispatcher session's active model |
 | `lanes[].deadlineSec` | number? | `deadlineSec` config (900) | Leash in seconds; holds even if the dispatcher is gone. Minimum 1 |
-| `lanes[].tools` | string? | all tools | Tool allowlist for `--tools`, e.g. `"read,grep,find,ls,bash"` |
+| `lanes[].tools` | string? | `read,grep,find,ls` | Tool allowlist for `--tools`; add `bash` when a lane must run commands (bash can still invoke git) |
 | `lanes[].noExtensions` | boolean? | false | Pass `-ne` (drop extensions incl. MCP in the lane) |
 | `lanes[].mcp` | boolean? | reachable | Set `false` to pass `--no-mcp` (default: MCP tools stay reachable per pi's tool-exposure rules) |
 | `workDir` | string? | `workDir` config (`.pi/work`) | Directory for manifest, events, and artifacts |
@@ -34,6 +34,12 @@ immediately; a lane that failed to spawn appears as `SPAWN ERROR: …`.
 **Errors** (the whole call fails, zero lanes spawned, no slug claimed):
 a brief file missing (all missing paths listed) · malformed or duplicate slugs ·
 wave slug already exists · `timeoutBin`/`piBin` not found on `PATH`.
+
+**Recursion guard:** lanes run with `PI_MINIMAL_DISPATCH_CHILD=1` in their
+environment, and the extension's factory stays out of any process carrying that
+marker — a lane never gets the `dispatch` tool. `-ne` (`noExtensions`) remains
+the switch that drops all extensions and MCP in a lane. Every lane in a call is
+spawned; the caller bounds the wave.
 
 ## `lanes`
 
@@ -77,9 +83,10 @@ re-adoption. Idempotent; honors tool-call cancellation during the grace wait.
 For each finished lane, writes the final assistant message (text blocks
 concatenated) to `<wave>-<name>.md`. Entries carry
 `{ name, artifact, suspect, stopReason }`; `suspect: true` when the lane
-failed, the message is empty, or the stop reason was not clean. A refused
-lane (still running / never spawned) is a **successful** tool result carrying
-a per-lane `reason`, not an error.
+failed, the message is empty, or the stop reason was not clean — treat such an
+artifact as **not done** and read the file only to judge it, don't paste it
+back into the conversation. A refused lane (still running / never spawned) is
+a **successful** tool result carrying a per-lane `reason`, not an error.
 
 ## Configuration
 

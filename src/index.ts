@@ -26,7 +26,7 @@ import {
 	writeManifestAtomic,
 } from "./derive.ts";
 import { formatStatusBarSummary, formatWaveStatus } from "./format.ts";
-import { type LaneParams, assertSlugs, buildLaneArgs, missingBriefs, resolveExecutable, selectKillTargets } from "./lane.ts";
+import { type LaneParams, assertSlugs, buildLaneArgs, laneEnv, missingBriefs, resolveExecutable, selectKillTargets } from "./lane.ts";
 
 /** Spawn one lane detached; a failure at any step becomes the record's spawnError, never a throw. */
 function spawnLane(workDir: string, wave: string, lane: LaneParams, cfg: DispatchConfig, timeoutBin: string): LaneRecord {
@@ -57,7 +57,7 @@ function spawnLane(workDir: string, wave: string, lane: LaneParams, cfg: Dispatc
 		const child = spawn(args[0], args.slice(1), {
 			detached: true, // own process group; survives this process's exit
 			stdio: ["ignore", outFd, errFd],
-			env: process.env,
+			env: laneEnv(),
 		});
 		child.unref();
 		child.on("error", (e) => {
@@ -96,7 +96,9 @@ const dispatchTool = defineTool({
 		"`timeout -k <graceSec> <deadlineSec> pi --mode json --no-session -ns [flags] @<briefPath>` in its own " +
 		"process group, streaming JSON events to <workDir>/<wave>-<name>.events.jsonl. Lanes survive this " +
 		"session's exit. Write briefs first — one brief file per lane is the lane's entire prompt; " +
-		"lanes run in fresh processes (JSON event mode, no session) with skills unloaded (-ns). " +
+		"lanes run in fresh processes (JSON event mode, no session) with skills unloaded (-ns), " +
+		"a read-only tool default, and never the dispatch tool itself. Every lane in the call is " +
+		"spawned — the caller bounds the wave. " +
 		"Then poll with the lanes tool; collect artifacts when settled.",
 	parameters: Type.Object({
 		wave: Type.String({ description: "Wave slug (kebab-case, max 64 chars); must not already exist in workDir" }),
@@ -106,7 +108,7 @@ const dispatchTool = defineTool({
 				briefPath: Type.String({ description: "Path to the lane's brief file (@file prompt)" }),
 				model: Type.Optional(Type.String({ description: "Pin a model id for this lane; omitted: pi's configured default model — not necessarily the dispatcher session's active model" })),
 				deadlineSec: Type.Optional(Type.Number({ description: "Deadline leash in seconds (config default: 900)", minimum: 1 })),
-				tools: Type.Optional(Type.String({ description: "Tool allowlist passed to --tools, e.g. 'read,grep,find,ls,bash'" })),
+				tools: Type.Optional(Type.String({ description: "Tool allowlist for --tools; omitted: 'read,grep,find,ls' — add 'bash' when a lane must run commands (bash can still invoke git)" })),
 				noExtensions: Type.Optional(Type.Boolean({ description: "Pass -ne (drop extensions incl. MCP)" })),
 				mcp: Type.Optional(Type.Boolean({ description: "Set false to pass --no-mcp (default: MCP tools stay reachable per pi's tool-exposure rules)" })),
 			}),
@@ -204,8 +206,11 @@ const lanesTool = defineTool({
 		"(starting/running/settled/failed + cause spawn|killed|deadline|crashed), turns, run-total usage, " +
 		"stopReason, last-event age, .err tail for crashed lanes. action=kill: SIGTERM the lane process group " +
 		"(SIGKILL after the configured grace), start-time guarded. action=collect: write each finished lane's final assistant " +
-		"message to <wave>-<name>.md (suspect-flagged on failure/empty/non-clean stopReason). Stateless: reads the manifest " +
-		"fresh — works across sessions, including after the dispatcher exited. Discover waves: ls <workDir>/*-manifest.json.",
+		"message to <wave>-<name>.md (suspect-flagged on failure/empty/non-clean stopReason); a refusal " +
+		"(running / never spawned) is a successful result with a per-lane reason. Stateless: reads the manifest " +
+		"fresh — works across sessions, including after the dispatcher exited. A collected lane is a path plus " +
+		"`suspect`; `suspect: true` means the artifact is not done — read the file only to judge it, do not paste " +
+		"it back. Discover waves: ls <workDir>/*-manifest.json.",
 	parameters: Type.Object({
 		wave: Type.String({ description: "Wave slug" }),
 		action: Type.Optional(StringEnum(["status", "kill", "collect"])),
@@ -368,6 +373,10 @@ function stopPolling(): void {
 }
 
 export default function (pi: ExtensionAPI) {
+	// A dispatched lane never gets the dispatch tool again — the child marker
+	// keeps this extension out of the lane while the rest of the user's setup loads.
+	if (process.env.PI_MINIMAL_DISPATCH_CHILD === "1") return;
+
 	pi.registerTool(dispatchTool);
 	pi.registerTool(lanesTool);
 

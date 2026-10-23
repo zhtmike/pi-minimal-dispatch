@@ -16,16 +16,23 @@ wave 'survey':
 
 ## Why
 
-Hand-written bash dispatch (`pi --print @brief > out.md &`) leaves the
-dispatcher blind while lanes run:
+Other pi subagent extensions run children inside the dispatcher's process and
+die with it — or need a server to keep them alive. **pi-minimal-dispatch lanes
+are plain `pi --mode json` processes in their own process groups that outlive
+the dispatcher, observable as plain files, collectible by any later session.**
 
-- the artifact stays empty until the lane exits — *working* and *hung* look identical
-- killing a lane means signaling a wrapper PID of unclear ownership
-- a mangled spawn line dies silently; a timeout kill loses everything
-- truncation, crash, and never-started are indistinguishable after the fact
+- `dispatch` returns the moment lanes are spawned — the dispatcher keeps working
+- **the deadline leash is GNU `timeout -k` around each process** — it fires even
+  after the dispatcher has exited
+- a later session re-adopts any wave from its manifest: `status`, `kill`, `collect`
+- the final text is a file on disk (`<wave>-<name>.md`), not a block pasted back
+  into the parent's context
 
-`pi-minimal-dispatch` fixes the seam itself: the extension owns the spawn, the
-lane emits a structured event stream, and state is *derived* from evidence.
+It replaces hand-written bash dispatch (`pi --print @brief > out.md &`), which
+leaves the dispatcher blind while lanes run: the artifact stays empty until the
+lane exits (working and hung look identical), killing means signaling a wrapper
+PID of unclear ownership, a mangled spawn line dies silently, and truncation,
+crash, and never-started are indistinguishable after the fact.
 
 ## Requirements
 
@@ -55,8 +62,31 @@ Dispatch two lanes: docs summarizes the request-handling module, review audits s
 Poll them and collect the artifacts when they settle.
 ```
 
-pi decides when to call the tools. The ceremony is:
-*write briefs → `dispatch` → poll `lanes status` → `collect` → clean up*.
+pi decides when to call the tools. A real session looks like:
+
+```text
+> dispatch  wave="survey" lanes=[{name:"docs", briefPath:".pi/work/survey-docs-brief.md",
+            model:"zai/glm-5.3-flash", deadlineSec:600}]
+  wave 'survey' dispatched — 1/1 lanes spawned
+    docs: pid 99015 (deadline 600s)
+  manifest: /abs/path/to/.pi/work/survey-manifest.json
+
+> lanes     wave="survey"
+  docs · running · 1 turns · tok 2966in/84out, $0.0005 · stop:toolUse · last 3s ago
+
+> lanes     wave="survey" action="collect"
+  collect wave 'survey':
+    docs: /abs/path/to/.pi/work/survey-docs.md stop:stop
+```
+
+The ceremony is *write briefs → `dispatch` → poll `lanes status` → `collect` →
+clean up*. For a quick single task: dispatch one lane, poll once after the
+expected duration, collect — there is deliberately no blocking mode.
+
+**Steering** is kill + redispatch: briefs are files, so refine the brief and run
+a new wave (slugs are single-use). **Hang detection**: `lastEventAgeSec` is the
+signal — no event growth for ~2× the lane's normal turn latency ⇒ `kill` and
+redispatch.
 
 ## API
 
@@ -105,7 +135,7 @@ when the process crashed. The statusbar and `/lanes` are TUI/RPC-only —
 |---|---|
 | `starting` | spawned, no session header yet |
 | `running` | events flowing (`overdue: true` once past deadline) |
-| `settled` | `agent_settled` emitted — final message available |
+| `settled` | `agent_settled` emitted (any stop reason — success is `collect` with `suspect: false`) |
 | `failed` | cause: `spawn` (synchronous, nothing ran) · `killed` (tombstoned) · `deadline` (leash fired, even parentless) · `crashed` (`.err` tail attached) |
 
 ## How it works

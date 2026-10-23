@@ -7,7 +7,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { assertSlugs, buildLaneArgs, missingBriefs, resolveExecutable, selectKillTargets } from "../src/lane.ts";
+import { assertSlugs, buildLaneArgs, laneEnv, missingBriefs, resolveExecutable, selectKillTargets } from "../src/lane.ts";
 import type { LaneRecord } from "../src/derive.ts";
 
 let failures = 0;
@@ -83,9 +83,19 @@ check(
 );
 const bare = buildLaneArgs({ name: "x", briefPath: "b.md" }, cfg, 900, 5);
 check(
-	"argv: omitted options add no flags",
-	bare.filter((a) => ["-ne", "--tools", "--no-mcp", "--model"].includes(a)).length === 0 && bare.length === 9,
+	"argv: omitted tools defaults to the read-only allowlist",
+	bare[bare.indexOf("--tools") + 1] === "read,grep,find,ls" && bare.length === 11,
 	JSON.stringify(bare),
+);
+check(
+	"child env: carries the lane marker over the parent env",
+	(() => {
+		process.env.TEST_MARKER = "present";
+		const env = laneEnv();
+		const ok = env.PI_MINIMAL_DISPATCH_CHILD === "1" && env.TEST_MARKER === "present";
+		delete process.env.TEST_MARKER;
+		return ok;
+	})(),
 );
 
 // --- selectKillTargets ------------------------------------------------------
