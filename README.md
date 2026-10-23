@@ -49,8 +49,9 @@ crash, and never-started are indistinguishable after the fact.
 ## Install
 
 ```bash
-pi install git:github.com/zhtmike/pi-minimal-dispatch   # or npm:pi-minimal-dispatch
-pi -e ./src/index.ts                                    # try it for one invocation
+pi install npm:pi-minimal-dispatch                         # official (registry)
+pi install git:github.com/zhtmike/pi-minimal-dispatch      # tracks main — between releases
+pi -e ./src/index.ts                                       # try it for one invocation
 ```
 
 ## Try this first
