@@ -36,7 +36,8 @@ crash, and never-started are indistinguishable after the fact.
 
 ## Requirements
 
-- pi ≥ 1.4.0
+- pi ≥ 1.3.0 — 1.4.0 recommended (it fixes pi deactivating extension tools after
+  `/resume` and `/tree` navigation, which wave re-adoption relies on)
 - **macOS or Linux** — Windows is not supported (the extension relies on POSIX
   process groups, `ps`, and `timeout`)
 - GNU `timeout`: preinstalled on Linux; on macOS install it with

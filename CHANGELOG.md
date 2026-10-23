@@ -2,7 +2,7 @@
 
 ## 0.1.0 — 2026-10-23
 
-Initial release.
+Initial release. Requires pi ≥ 1.3.0 (1.4.0 recommended — see README).
 
 - `dispatch` tool: detached lane spawning (own process group, argv array, no
   shell wrapper) with synchronous brief/slug validation, atomic wave-slug
