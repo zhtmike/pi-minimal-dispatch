@@ -3,11 +3,11 @@
  * Run: node tests/derive.test.ts  (cheap CPU: files + ps only, no network/model)
  */
 
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { type LaneRecord, deriveLane, finalAssistantText, pidAlive, psLstart } from "../src/derive.ts";
+import { type LaneRecord, type Manifest, deriveLane, finalAssistantText, pidAlive, psLstart, waveTerminal, waitForTerminal, writeManifestAtomic } from "../src/derive.ts";
 import { parseEvents } from "../src/events.ts";
 
 let failures = 0;
@@ -126,6 +126,95 @@ const events = [
 ];
 check("finalAssistantText: last assistant message, text blocks joined", finalAssistantText(events) === "A\nB");
 check("finalAssistantText: no assistant message = empty", finalAssistantText([{ type: "message_end", message: { role: "user", content: "q" } }]) === "");
+
+// --- waveTerminal + waitForTerminal -----------------------------------------
+
+const workDir2 = fs.mkdtempSync(path.join(os.tmpdir(), "pi-minimal-dispatch-wait-"));
+const wEvents = path.join(workDir2, "w.events.jsonl");
+const wErr = path.join(workDir2, "w.err");
+const child = spawn("sh", ["-c", "sleep 30"]); // real liveness for the running state
+const wLane: LaneRecord = {
+	name: "w",
+	briefPath: "/dev/null",
+	eventsPath: wEvents,
+	errPath: wErr,
+	pid: child.pid!,
+	processStart: psLstart(child.pid!),
+	startedAt: new Date().toISOString(),
+	deadlineSec: 900,
+	spawned: true,
+};
+const manifest: Manifest = { version: 1, wave: "w", workDir: workDir2, createdAt: wLane.startedAt, lanes: [wLane] };
+const writeWEvents = (lines: string[]) => fs.writeFileSync(wEvents, lines.join("\n") + "\n");
+const writeWManifest = () => writeManifestAtomic(manifest);
+fs.writeFileSync(wErr, "");
+
+// Running: session header only.
+writeWEvents([JSON.stringify({ type: "session", id: "s" })]);
+writeWManifest();
+check("waveTerminal: running wave is not terminal", !waveTerminal(manifest.lanes, Date.now()));
+
+// Settled: agent_settled wins even while the pid lives.
+writeWEvents([JSON.stringify({ type: "session", id: "s" }), JSON.stringify({ type: "agent_settled" })]);
+check("waveTerminal: settled wave is terminal", waveTerminal(manifest.lanes, Date.now()));
+check("waveTerminal: spawn-failed lane is terminal", waveTerminal([{ ...wLane, pid: null, spawned: false }], Date.now()));
+
+// waitForTerminal: already terminal resolves without sleeping a full poll.
+{
+	const t0 = Date.now();
+	const statuses = await waitForTerminal(workDir2, "w", 5000, 200);
+	const elapsed = Date.now() - t0;
+	check(
+		"waitForTerminal: terminal-from-start returns immediately",
+		statuses.length === 1 && statuses[0].state === "settled" && elapsed < 1500,
+		`elapsed ${elapsed}ms`,
+	);
+}
+
+// waitForTerminal: timeout with a running lane is a normal result.
+writeWEvents([JSON.stringify({ type: "session", id: "s" })]);
+{
+	const t0 = Date.now();
+	const statuses = await waitForTerminal(workDir2, "w", 300, 50);
+	const elapsed = Date.now() - t0;
+	check(
+		"waitForTerminal: timeout returns running lanes, never throws",
+		statuses[0].state === "running" && elapsed >= 280 && elapsed < 2500,
+		`state ${statuses[0].state} elapsed ${elapsed}ms`,
+	);
+}
+
+// waitForTerminal: a settle mid-wait wakes the caller at the poll cadence.
+{
+	const timer = setTimeout(() => fs.appendFileSync(wEvents, JSON.stringify({ type: "agent_settled" }) + "\n"), 150);
+	const t0 = Date.now();
+	const statuses = await waitForTerminal(workDir2, "w", 10000, 50);
+	clearTimeout(timer);
+	const elapsed = Date.now() - t0;
+	check(
+		"waitForTerminal: mid-wait settle wakes within ~pollMs",
+		statuses[0].state === "settled" && elapsed >= 100 && elapsed < 2500,
+		`state ${statuses[0].state} elapsed ${elapsed}ms`,
+	);
+}
+
+// waitForTerminal: an aborted signal wakes at the abort instant, not at the next poll.
+writeWEvents([JSON.stringify({ type: "session", id: "s" })]);
+{
+	const controller = new AbortController();
+	setTimeout(() => controller.abort(), 120);
+	const t0 = Date.now();
+	const statuses = await waitForTerminal(workDir2, "w", 10000, 2000, controller.signal);
+	const elapsed = Date.now() - t0;
+	check(
+		"waitForTerminal: abort wakes immediately with current state",
+		statuses[0].state === "running" && elapsed >= 100 && elapsed < 1000,
+		`state ${statuses[0].state} elapsed ${elapsed}ms`,
+	);
+}
+
+child.kill("SIGKILL");
+fs.rmSync(workDir2, { recursive: true, force: true });
 
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(failures === 0 ? "\nall passed" : `\n${failures} FAILED`);

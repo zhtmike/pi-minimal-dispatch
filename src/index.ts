@@ -23,6 +23,7 @@ import {
 	pidAlive,
 	psLstart,
 	readManifest,
+	waitForTerminal,
 	writeManifestAtomic,
 } from "./derive.ts";
 import { formatStatusBarSummary, formatWaveStatus } from "./format.ts";
@@ -208,7 +209,10 @@ const lanesTool = defineTool({
 	description:
 		"Observe/control a dispatched wave. action=status (default): per-lane derived state " +
 		"(starting/running/settled/failed + cause spawn|killed|deadline|crashed), turns, run-total usage, " +
-		"stopReason, last-event age, .err tail for crashed lanes. action=kill: SIGTERM the lane process group " +
+		"stopReason, last-event age, .err tail for crashed lanes. action=wait: hold this call open, " +
+		"re-deriving at the pollMs cadence, until every lane is settled/failed or waitSec (default 300, " +
+		"max 3600) elapses — then return the status table; replaces blind sleep-then-status polling. " +
+		"action=kill: SIGTERM the lane process group " +
 		"(SIGKILL after the configured grace), start-time guarded. action=collect: write each finished lane's final assistant " +
 		"message to <wave>-<name>.md (suspect-flagged on failure/empty/non-clean stopReason); a refusal " +
 		"(running / never spawned) is a successful result with a per-lane reason. Stateless: reads the manifest " +
@@ -217,7 +221,8 @@ const lanesTool = defineTool({
 		"it back. Discover waves: ls <workDir>/*-manifest.json.",
 	parameters: Type.Object({
 		wave: Type.String({ description: "Wave slug" }),
-		action: Type.Optional(StringEnum(["status", "kill", "collect"])),
+		action: Type.Optional(StringEnum(["status", "wait", "kill", "collect"])),
+		waitSec: Type.Optional(Type.Number({ description: "wait action only: max seconds to hold the call open (default 300; 1–3600)", minimum: 1, maximum: 3600 })),
 		workDir: Type.Optional(Type.String({ description: "Directory holding the manifest (config default: .pi/work)" })),
 	}),
 
@@ -231,6 +236,16 @@ const lanesTool = defineTool({
 		if (action === "status") {
 			const now = Date.now();
 			const statuses = manifest.lanes.map((l) => deriveLane(l, now));
+			return {
+				content: [{ type: "text", text: formatWaveStatus(params.wave, statuses) }],
+				structuredContent: { wave: params.wave, lanes: statuses },
+				details: { wave: params.wave },
+			};
+		}
+
+		if (action === "wait") {
+			// A timeout is a normal status result with running lanes, never an error.
+			const statuses = await waitForTerminal(workDir, params.wave, (params.waitSec ?? 300) * 1000, cfg.pollMs, signal);
 			return {
 				content: [{ type: "text", text: formatWaveStatus(params.wave, statuses) }],
 				structuredContent: { wave: params.wave, lanes: statuses },

@@ -15,7 +15,7 @@ three in sync in the same change.
 
 ## Layout
 
-- `src/index.ts` — tool definitions, detached spawning, kill/collect actions, statusbar + `/lanes`
+- `src/index.ts` — tool definitions, detached spawning, wait/kill/collect actions, statusbar + `/lanes`
 - `src/config.ts` — configuration: defaults, user/project file merge, validation
 - `src/events.ts` — typed lane event-stream parsing (`pi --mode json` JSONL)
 - `src/derive.ts` — manifest registry, process liveness, state derivation; pure Node builtins, importable without the pi host

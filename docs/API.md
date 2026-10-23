@@ -80,7 +80,8 @@ fresh one after the dispatcher exited — sees the same truth.
 | Parameter | Type | Default | Description |
 |---|---|---|---|
 | `wave` | string | — | Wave slug |
-| `action` | string? | `"status"` | `"status"` \| `"kill"` \| `"collect"` |
+| `action` | string? | `"status"` | `"status"` \| `"wait"` \| `"kill"` \| `"collect"` |
+| `waitSec` | number? | `300` | `wait` only: max seconds to hold the call open (1–3600) |
 | `workDir` | string? | `workDir` config (`.pi/work`) | Directory holding the manifest |
 
 ### `status`
@@ -101,6 +102,18 @@ Per-lane `structuredContent` entries. Note: `settled` only means the
 | `lastEventAgeSec` | number? | seconds since the events file last grew — the stuck-lane signal |
 | `spawnError` | string? | why a `spawn`-failed lane never started |
 | `errTail` | string? | last lines of `.err` for `crashed` lanes |
+
+### `wait`
+
+Holds the tool call open, re-reading the manifest and re-deriving state every
+`pollMs`, until every lane is terminal (`settled` or `failed`), `waitSec`
+(default 300, max 3600) elapses, or the call is cancelled — then returns
+exactly the `status` payload. A timeout is **not** an error: lanes still
+running show as `running`, and the caller waits again (or proceeds to
+`kill`/`collect`, which refuse running lanes as usual). This replaces
+sleep-then-status polling, which guesses the duration and wakes late after a
+settle. `dispatch` still returns in under a second — blocking is always this
+explicit, bounded observation call, and the deadline leash needs no observer.
 
 ### `kill`
 

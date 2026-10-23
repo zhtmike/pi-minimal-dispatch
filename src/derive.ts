@@ -159,6 +159,53 @@ export function deriveLane(lane: LaneRecord, now: number): LaneStatus {
 	};
 }
 
+/** Whether every lane of a wave has reached a terminal state (`settled` or `failed`). */
+export function waveTerminal(lanes: LaneRecord[], now: number): boolean {
+	return lanes.every((lane) => {
+		const state = deriveLane(lane, now).state;
+		return state === "settled" || state === "failed";
+	});
+}
+
+/**
+ * Poll a wave until every lane is terminal, `waitMs` elapses, or the signal
+ * aborts; returns the final statuses. Re-reads the manifest on every poll —
+ * the same derived truth as the status action, held open.
+ */
+export async function waitForTerminal(
+	workDir: string,
+	wave: string,
+	waitMs: number,
+	pollMs: number,
+	signal?: AbortSignal,
+): Promise<LaneStatus[]> {
+	const deadline = Date.now() + waitMs;
+	for (;;) {
+		const lanes = readManifest(workDir, wave).lanes;
+		const now = Date.now();
+		if (waveTerminal(lanes, now) || now >= deadline || signal?.aborted) {
+			return lanes.map((lane) => deriveLane(lane, now));
+		}
+		// The sleep races the abort so a cancelled call returns at once, not at the next poll.
+		await new Promise<void>((resolve) => {
+			const delay = Math.min(pollMs, deadline - now);
+			if (signal === undefined) {
+				setTimeout(resolve, delay);
+				return;
+			}
+			const timer = setTimeout(() => {
+				signal.removeEventListener("abort", onAbort);
+				resolve();
+			}, delay);
+			const onAbort = () => {
+				clearTimeout(timer);
+				resolve();
+			};
+			signal.addEventListener("abort", onAbort, { once: true });
+		});
+	}
+}
+
 /** Final assistant message text (concatenated text blocks of the last assistant message_end). */
 export function finalAssistantText(events: LaneEvent[]): string {
 	let text = "";

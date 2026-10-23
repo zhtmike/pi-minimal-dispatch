@@ -81,9 +81,13 @@ pi decides when to call the tools. A real session looks like:
     docs: /abs/path/to/.pi/work/survey-docs.md stop:stop
 ```
 
-The ceremony is *write briefs → `dispatch` → poll `lanes status` → `collect` →
-clean up*. For a quick single task: dispatch one lane, poll once after the
-expected duration, collect — there is deliberately no blocking mode.
+The ceremony is *write briefs → `dispatch` → `lanes wait` (or poll `status`) →
+`collect` → clean up*. For a quick single task: dispatch one lane and let a
+single `wait` call hold open until it settles — no sleep-then-poll guessing,
+no waking late after a settle. `dispatch` itself never blocks; waiting is an
+explicit, bounded `lanes` call (`waitSec`, default 300, max 3600) that returns
+the status table as soon as a poll finds every lane `settled`/`failed`
+(within one `pollMs`).
 
 **Web/MCP reach**: the default lane is offline. MCP servers connecting grants
 nothing by themselves — a lane reaches their tools only through `codemode` or
@@ -111,9 +115,9 @@ Two tools — full parameter, output, and configuration reference in
   the wave slug atomically, spawn every lane detached in its own process
   group, return in under a second. Per-lane: `model`, `deadlineSec`, `tools`,
   `noExtensions`, `mcp`.
-- **`lanes`** `{wave, action?, workDir?}` — stateless `status` / `kill` /
-  `collect` over the wave's manifest; any session can re-adopt a wave,
-  including after the dispatcher exited.
+- **`lanes`** `{wave, action?, waitSec?, workDir?}` — stateless `status` /
+  `wait` / `kill` / `collect` over the wave's manifest; any session can re-adopt
+  a wave, including after the dispatcher exited.
 
 ## Configuration
 

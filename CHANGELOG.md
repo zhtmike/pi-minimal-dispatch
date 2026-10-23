@@ -22,10 +22,11 @@ Initial release. Requires pi ≥ 1.3.0 (1.4.0 recommended — see README).
   shell wrapper) with synchronous brief/slug validation, atomic wave-slug
   claim, per-lane model/deadline/tool allowlist, and a parentless deadline
   leash (`timeout -k`).
-- `lanes` tool: stateless status/kill/collect over a wave's manifest + JSON
+- `lanes` tool: stateless status/wait/kill/collect over a wave's manifest + JSON
   event streams — derived state with failure causes, start-time-guarded PID
-  liveness, TERM→KILL group kill with tombstones, and suspect-flagged
-  artifact collection.
+  liveness, a bounded `wait` action that holds one call open until the wave is
+  terminal (no blind sleep-polling), TERM→KILL group kill with tombstones, and
+  suspect-flagged artifact collection.
 - Safe defaults: lanes run read-only (`read,grep,find,ls`) unless granted
   more via `tools`, never load skills (`-ns`), and never receive the
   `dispatch` tool themselves (child marker).

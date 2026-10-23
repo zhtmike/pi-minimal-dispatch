@@ -23,6 +23,9 @@ test ! -e "$WORK/$WAVE-blind-manifest.json" || { echo "FAIL: rejection stranded 
 echo "== dispatch wave $WAVE (one quick lane, flash, offline) =="
 "$PI_BIN" --print --no-session -ne -e "$REPO_DIR/src/index.ts" "Call the dispatch tool with wave=\"$WAVE\", lanes=[{name:\"quick\",briefPath:\"$WORK/$WAVE-quick-brief.md\",model:\"zai/glm-5.3-flash\",deadlineSec:180,mcp:false}]. Report the result, then stop."
 
+echo "== wait for the wave to become terminal (bounded 180s) =="
+"$PI_BIN" --print --no-session -ne -e "$REPO_DIR/src/index.ts" "Call the lanes tool with wave=\"$WAVE\", action=\"wait\", waitSec=180. Report the result verbatim, then stop."
+
 echo "== poll status =="
 "$PI_BIN" --print --no-session -ne -e "$REPO_DIR/src/index.ts" "Call the lanes tool with wave=\"$WAVE\", action=\"status\". Report the result verbatim, then stop."
 
