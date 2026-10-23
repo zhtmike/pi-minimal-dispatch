@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 — 2026-10-23
+
+Requires pi ≥ 1.4.0 (the MCP reach rules the validator encodes are pi
+1.4.0's documented `--tools` semantics).
 
 - `dispatch` no longer spawns blind MCP lanes: with MCP enabled, a lane whose
   `tools` allowlist names neither `codemode` nor `tool_search` is rejected at
@@ -14,6 +17,11 @@
 - README and docs/API.md document the reach rule and both reach recipes; the
   `mcp` schema text no longer claims MCP tools "stay reachable" by default.
 
+- `lanes` gained `action: "wait"` (+ `waitSec`, default 300, max 3600):
+  holds one call open, re-deriving at the `pollMs` cadence, until every lane
+  is terminal — replaces blind sleep-then-status polling (which wakes late
+  after settles); times out as a normal status result, honors cancellation.
+
 ## 0.1.0 — 2026-10-23
 
 Initial release. Requires pi ≥ 1.3.0 (1.4.0 recommended — see README).
@@ -22,11 +30,10 @@ Initial release. Requires pi ≥ 1.3.0 (1.4.0 recommended — see README).
   shell wrapper) with synchronous brief/slug validation, atomic wave-slug
   claim, per-lane model/deadline/tool allowlist, and a parentless deadline
   leash (`timeout -k`).
-- `lanes` tool: stateless status/wait/kill/collect over a wave's manifest + JSON
+- `lanes` tool: stateless status/kill/collect over a wave's manifest + JSON
   event streams — derived state with failure causes, start-time-guarded PID
-  liveness, a bounded `wait` action that holds one call open until the wave is
-  terminal (no blind sleep-polling), TERM→KILL group kill with tombstones, and
-  suspect-flagged artifact collection.
+  liveness, TERM→KILL group kill with tombstones, and suspect-flagged
+  artifact collection.
 - Safe defaults: lanes run read-only (`read,grep,find,ls`) unless granted
   more via `tools`, never load skills (`-ns`), and never receive the
   `dispatch` tool themselves (child marker).

@@ -24,7 +24,7 @@ the dispatcher, observable as plain files, collectible by any later session.**
 - `dispatch` returns the moment lanes are spawned — the dispatcher keeps working
 - **the deadline leash is GNU `timeout -k` around each process** — it fires even
   after the dispatcher has exited
-- a later session re-adopts any wave from its manifest: `status`, `kill`, `collect`
+- a later session re-adopts any wave from its manifest: `status`, `wait`, `kill`, `collect`
 - the final text is a file on disk (`<wave>-<name>.md`), not a block pasted back
   into the parent's context
 
@@ -36,8 +36,7 @@ crash, and never-started are indistinguishable after the fact.
 
 ## Requirements
 
-- pi ≥ 1.3.0 — 1.4.0 recommended (it fixes pi deactivating extension tools after
-  `/resume` and `/tree` navigation, which wave re-adoption relies on)
+- pi ≥ 1.4.0
 - **macOS or Linux** — Windows is not supported (the extension relies on POSIX
   process groups, `ps`, and `timeout`)
 - GNU `timeout`: preinstalled on Linux; on macOS install it with
@@ -61,24 +60,28 @@ expected deliverable), then ask in plain language:
 
 ```text
 Dispatch two lanes: docs summarizes the request-handling module, review audits src/auth.
-Poll them and collect the artifacts when they settle.
+Wait for them to settle and collect the artifacts.
 ```
 
 pi decides when to call the tools. A real session looks like:
 
 ```text
 > dispatch  wave="survey" lanes=[{name:"docs", briefPath:".pi/work/survey-docs-brief.md",
-            model:"zai/glm-5.3-flash", deadlineSec:600, mcp:false}]
-  wave 'survey' dispatched — 1/1 lanes spawned
-    docs: pid 99015 (deadline 600s)
+            model:"zai/glm-5.3-flash", mcp:false},
+            {name:"review", briefPath:".pi/work/survey-review-brief.md", mcp:false}]
+  wave 'survey' dispatched — 2/2 lanes spawned
+    docs: pid 99015 (deadline 900s)
+    review: pid 99016 (deadline 900s)
   manifest: /abs/path/to/.pi/work/survey-manifest.json
 
-> lanes     wave="survey"
-  docs · running · 1 turns · tok 2966in/84out, $0.0005 · stop:toolUse · last 3s ago
+> lanes     wave="survey" action="wait"
+  docs · settled · 2 turns · tok 5703in/90out, $0.0009 · stop:stop · last 0.8s ago
+  review · settled · 4 turns · tok 12021in/310out, $0.0041 · stop:stop · last 2.1s ago
 
 > lanes     wave="survey" action="collect"
   collect wave 'survey':
     docs: /abs/path/to/.pi/work/survey-docs.md stop:stop
+    review: /abs/path/to/.pi/work/survey-review.md stop:stop
 ```
 
 The ceremony is *write briefs → `dispatch` → `lanes wait` (or poll `status`) →
@@ -88,18 +91,6 @@ no waking late after a settle. `dispatch` itself never blocks; waiting is an
 explicit, bounded `lanes` call (`waitSec`, default 300, max 3600) that returns
 the status table as soon as a poll finds every lane `settled`/`failed`
 (within one `pollMs`).
-
-**Web/MCP reach**: the default lane is offline. MCP servers connecting grants
-nothing by themselves — a lane reaches their tools only through `codemode` or
-`tool_search` named in its `tools` (`codemode` scripts and `tool_search` wait
-for the servers they need; an `mcp__server__*` entry declares tools directly
-only when the server has `direct` exposure in `mcp.json`, so it is a scope,
-not a route). A lane that leaves MCP enabled without `codemode`/`tool_search`
-in `tools` would run blind, so `dispatch` rejects it — pass a route or set
-`mcp: false` (servers never connect). Entries reach pi verbatim, no shell
-quoting: `tools: "read,grep,find,ls,codemode"`. Plain names/patterns only:
-`+name`/`-name` modifier lists (which pi applies to its default selection,
-silently granting `bash`/`edit`/`write`) and empty lists are rejected too.
 
 **Steering** is kill + redispatch: briefs are files, so refine the brief and run
 a new wave (slugs are single-use). **Hang detection**: `lastEventAgeSec` is the
@@ -118,6 +109,18 @@ Two tools — full parameter, output, and configuration reference in
 - **`lanes`** `{wave, action?, waitSec?, workDir?}` — stateless `status` /
   `wait` / `kill` / `collect` over the wave's manifest; any session can re-adopt
   a wave, including after the dispatcher exited.
+
+**Web/MCP reach**: the default lane is offline. MCP servers connecting grants
+nothing by themselves — a lane reaches their tools only through `codemode` or
+`tool_search` named in its `tools` (`codemode` scripts and `tool_search` wait
+for the servers they need; an `mcp__server__*` entry declares tools directly
+only when the server has `direct` exposure in `mcp.json`, so it is a scope,
+not a route). A lane that leaves MCP enabled without `codemode`/`tool_search`
+in `tools` would run blind, so `dispatch` rejects it — pass a route or set
+`mcp: false` (servers never connect). Entries reach pi verbatim, no shell
+quoting: `tools: "read,grep,find,ls,codemode"`. Plain names/patterns only:
+`+name`/`-name` modifier lists (which pi applies to its default selection,
+silently granting `bash`/`edit`/`write`) and empty lists are rejected too.
 
 ## Configuration
 
@@ -171,8 +174,9 @@ when the process crashed. The statusbar and `/lanes` are TUI/RPC-only —
 
 ```bash
 node tests/config.test.ts    # configuration precedence + validation
-node tests/derive.test.ts    # state derivation, liveness guard, event parsing
+node tests/derive.test.ts    # state derivation, wait loop, liveness guard, event parsing
 node tests/format.test.ts    # presentation formatters
+node tests/lane.test.ts      # slugs, briefs, argv, lane tool-contract validation
 bash tests/prove.sh          # integration: replays a live wave (bills models)
 ```
 
