@@ -73,7 +73,8 @@ Two tools — full parameter, output, and configuration reference in
 
 ## Configuration
 
-All knobs are configurable — nothing is hardcoded. Defaults come from the
+The lane protocol is fixed (`--mode json --no-session -ns` — lanes never load
+skills); every variable knob is configurable. Defaults come from the
 extension; user config `~/.pi/agent/pi-minimal-dispatch.json` and project
 config `.pi/pi-minimal-dispatch.json` override them, and per-call parameters
 win last: `workDir`, `deadlineSec` (900), `killGraceMs` (5000), `pollMs`
@@ -94,7 +95,11 @@ derived state the `lanes` tool reports.
 
 Each lane's status is derived on every call from its event stream, PID
 liveness (guarded by process start-time — a reused PID is never signaled),
-and the deadline. Never stored, never stale:
+and the deadline. Never stored, never stale. `settled` means the
+`agent_settled` event was seen — **success is `collect` with
+`suspect: false`**; a death after the deadline is labeled `deadline` even
+when the process crashed. The statusbar and `/lanes` are TUI/RPC-only —
+`--print`/`--mode json` sessions see status through the `lanes` tool alone.
 
 | State | Meaning |
 |---|---|

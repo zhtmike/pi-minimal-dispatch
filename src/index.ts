@@ -2,7 +2,8 @@
  * pi-minimal-dispatch — detached lane dispatch with visible state (README.md).
  * `dispatch`: spawn a wave of detached `timeout … pi --mode json …` lanes, return immediately.
  * `lanes`: stateless status/kill/collect over the wave's manifest + event streams.
- * All knobs are configurable (docs/API.md → Configuration); nothing is hardcoded.
+ * The lane protocol is fixed (`--mode json --no-session -ns`); every variable
+ * knob is configurable (docs/API.md → Configuration).
  */
 
 import { spawn } from "node:child_process";
@@ -25,35 +26,10 @@ import {
 	writeManifestAtomic,
 } from "./derive.ts";
 import { formatStatusBarSummary, formatWaveStatus } from "./format.ts";
-
-function resolveExecutable(name: string): string {
-	for (const dir of (process.env.PATH ?? "").split(path.delimiter)) {
-		if (!dir) continue;
-		const p = path.join(dir, name);
-		try {
-			fs.accessSync(p, fs.constants.X_OK);
-			return p;
-		} catch {
-			// keep scanning
-		}
-	}
-	throw new Error(`executable '${name}' not found on PATH`);
-}
-
-const SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/;
-
-/** Validate wave and lane slugs: kebab-case, max 64 chars, unique within the call. */
-function assertSlugs(wave: string, names: string[]): void {
-	const bad: string[] = [];
-	if (!SLUG.test(wave)) bad.push(`wave '${wave}'`);
-	for (const n of names) if (!SLUG.test(n)) bad.push(`lane '${n}'`);
-	const dupes = names.filter((n, i) => names.indexOf(n) !== i);
-	for (const d of new Set(dupes)) bad.push(`duplicate lane '${d}'`);
-	if (bad.length > 0) throw new Error(`slugs must be kebab-case [a-z0-9-], max 64 chars, unique: ${bad.join(", ")}`);
-}
+import { type LaneParams, assertSlugs, buildLaneArgs, missingBriefs, resolveExecutable, selectKillTargets } from "./lane.ts";
 
 /** Spawn one lane detached; a failure at any step becomes the record's spawnError, never a throw. */
-function spawnLane(workDir: string, wave: string, lane: { name: string; briefPath: string; model?: string; deadlineSec?: number; tools?: string; noExtensions?: boolean; mcp?: boolean }, cfg: DispatchConfig): LaneRecord {
+function spawnLane(workDir: string, wave: string, lane: LaneParams, cfg: DispatchConfig, timeoutBin: string): LaneRecord {
 	const briefPath = path.resolve(lane.briefPath);
 	const record: LaneRecord = {
 		name: lane.name,
@@ -75,19 +51,10 @@ function spawnLane(workDir: string, wave: string, lane: { name: string; briefPat
 		outFd = fs.openSync(record.eventsPath, "w");
 		errFd = fs.openSync(record.errPath, "w");
 		const args = [
-			String(record.deadlineSec),
-			cfg.piBin,
-			"--mode",
-			"json",
-			"--no-session",
-			"-ns",
-			...(lane.noExtensions ? ["-ne"] : []),
-			...(lane.tools ? ["--tools", lane.tools] : []),
-			...(lane.mcp === false ? ["--no-mcp"] : []),
-			...(lane.model ? ["--model", lane.model] : []),
-			`@${briefPath}`,
+			timeoutBin,
+			...buildLaneArgs(lane, cfg, record.deadlineSec, Math.ceil(cfg.killGraceMs / 1000)),
 		];
-		const child = spawn(cfg.timeoutBin, args, {
+		const child = spawn(args[0], args.slice(1), {
 			detached: true, // own process group; survives this process's exit
 			stdio: ["ignore", outFd, errFd],
 			env: process.env,
@@ -100,8 +67,18 @@ function spawnLane(workDir: string, wave: string, lane: { name: string; briefPat
 			} catch {}
 		});
 		record.pid = child.pid;
-		record.processStart = psLstart(child.pid!);
-		record.spawned = true;
+		const start = psLstart(child.pid!);
+		if (start === "") {
+			// Without a start-time the liveness guard can never match — stop the lane
+			// now rather than record an unmatchable identity.
+			try {
+				process.kill(-child.pid!, "SIGTERM");
+			} catch {}
+			record.spawnError = "could not capture process start-time (ps failed); lane terminated";
+		} else {
+			record.processStart = start;
+			record.spawned = true;
+		}
 	} catch (e: any) {
 		record.spawnError = e.message;
 	} finally {
@@ -115,10 +92,11 @@ const dispatchTool = defineTool({
 	name: "dispatch",
 	label: "Dispatch lanes",
 	description:
-		"Spawn detached sub-agent lanes (fresh pi processes) for a wave and return immediately. " +
-		"Each lane runs `timeout <deadlineSec> pi --mode json --no-session -ns [flags] @<briefPath>` in its own " +
+		"Spawn detached sub-agent lanes (fresh pi processes) for a wave and return immediately. Each lane runs " +
+		"`timeout -k <graceSec> <deadlineSec> pi --mode json --no-session -ns [flags] @<briefPath>` in its own " +
 		"process group, streaming JSON events to <workDir>/<wave>-<name>.events.jsonl. Lanes survive this " +
-		"session's exit. Write briefs first (one file per lane, addressee = dispatched leaf). " +
+		"session's exit. Write briefs first — one brief file per lane is the lane's entire prompt; " +
+		"lanes run in fresh processes (JSON event mode, no session) with skills unloaded (-ns). " +
 		"Then poll with the lanes tool; collect artifacts when settled.",
 	parameters: Type.Object({
 		wave: Type.String({ description: "Wave slug (kebab-case, max 64 chars); must not already exist in workDir" }),
@@ -126,11 +104,11 @@ const dispatchTool = defineTool({
 			Type.Object({
 				name: Type.String({ description: "Lane slug (kebab-case, max 64 chars, unique within the wave)" }),
 				briefPath: Type.String({ description: "Path to the lane's brief file (@file prompt)" }),
-				model: Type.Optional(Type.String({ description: "Pin a model id for this lane" })),
+				model: Type.Optional(Type.String({ description: "Pin a model id for this lane; omitted: pi's configured default model — not necessarily the dispatcher session's active model" })),
 				deadlineSec: Type.Optional(Type.Number({ description: "Deadline leash in seconds (config default: 900)", minimum: 1 })),
 				tools: Type.Optional(Type.String({ description: "Tool allowlist passed to --tools, e.g. 'read,grep,find,ls,bash'" })),
 				noExtensions: Type.Optional(Type.Boolean({ description: "Pass -ne (drop extensions incl. MCP)" })),
-				mcp: Type.Optional(Type.Boolean({ description: "Set false to pass --no-mcp (default: MCP reachable per exposure)" })),
+				mcp: Type.Optional(Type.Boolean({ description: "Set false to pass --no-mcp (default: MCP tools stay reachable per pi's tool-exposure rules)" })),
 			}),
 			{ minItems: 1 },
 		),
@@ -145,11 +123,7 @@ const dispatchTool = defineTool({
 		assertSlugs(params.wave, params.lanes.map((l) => l.name));
 
 		// All briefs must exist before anything spawns: report every missing one.
-		const missing: string[] = [];
-		for (const lane of params.lanes) {
-			const abs = path.resolve(lane.briefPath);
-			if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) missing.push(lane.briefPath);
-		}
+		const missing = missingBriefs(params.lanes);
 		if (missing.length > 0) {
 			throw new Error(`brief file(s) not found: ${missing.join(", ")} — nothing spawned`);
 		}
@@ -182,7 +156,7 @@ const dispatchTool = defineTool({
 			lanes: [],
 		};
 		for (const lane of params.lanes) {
-			manifest.lanes.push(spawnLane(workDir, params.wave, lane, { ...cfg, timeoutBin }));
+			manifest.lanes.push(spawnLane(workDir, params.wave, lane, cfg, timeoutBin));
 		}
 
 		try {
@@ -231,7 +205,7 @@ const lanesTool = defineTool({
 		"stopReason, last-event age, .err tail for crashed lanes. action=kill: SIGTERM the lane process group " +
 		"(SIGKILL after the configured grace), start-time guarded. action=collect: write each finished lane's final assistant " +
 		"message to <wave>-<name>.md (suspect-flagged on failure/empty/non-clean stopReason). Stateless: reads the manifest " +
-		"fresh — works across sessions, including after the dispatcher exited.",
+		"fresh — works across sessions, including after the dispatcher exited. Discover waves: ls <workDir>/*-manifest.json.",
 	parameters: Type.Object({
 		wave: Type.String({ description: "Wave slug" }),
 		action: Type.Optional(StringEnum(["status", "kill", "collect"])),
@@ -258,12 +232,14 @@ const lanesTool = defineTool({
 		if (action === "kill") {
 			const killed: string[] = [];
 			try {
-				for (const lane of manifest.lanes) {
-					if (lane.pid === null || !lane.spawned) continue;
-					if (!pidAlive(lane.pid, lane.processStart)) continue; // never signal a reused PID
-					if (deriveLane(lane, Date.now()).state === "settled") continue;
+				const targets = selectKillTargets(
+					manifest.lanes,
+					(l) => pidAlive(l.pid!, l.processStart), // never signal a reused PID
+					(l) => deriveLane(l, Date.now()).state === "settled",
+				);
+				for (const lane of targets) {
 					try {
-						process.kill(-lane.pid, "SIGTERM"); // negative = process group (timeout + pi)
+						process.kill(-lane.pid!, "SIGTERM"); // negative = process group (timeout + pi)
 					} catch (e: any) {
 						if (e.code === "ESRCH") continue;
 						throw e;

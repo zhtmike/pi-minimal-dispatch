@@ -8,8 +8,11 @@ this document is the human-facing copy and must stay in sync with both.
 ## `dispatch`
 
 Spawns a wave and returns in under a second. Lanes run
-`<timeoutBin> <deadlineSec> <piBin> --mode json --no-session -ns [flags] @<brief>`
-detached, events streaming to `<workDir>/<wave>-<name>.events.jsonl`.
+`<timeoutBin> -k <graceSec> <deadlineSec> <piBin> --mode json --no-session -ns [flags] @<brief>`
+detached — the `--mode json --no-session -ns` triple is the fixed lane
+protocol (fresh process, JSON event stream, skills never loaded); `-k`
+escalates a caught SIGTERM to SIGKILL so a stalled dispose cannot outlive
+the leash. Events stream to `<workDir>/<wave>-<name>.events.jsonl`.
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
@@ -17,11 +20,11 @@ detached, events streaming to `<workDir>/<wave>-<name>.events.jsonl`.
 | `lanes` | array | — | One entry per lane (min 1); lane slugs unique within the wave |
 | `lanes[].name` | string | — | Lane slug: `kebab-case`, max 64 chars |
 | `lanes[].briefPath` | string | — | Path to the lane's brief file (its `@file` prompt) |
-| `lanes[].model` | string? | inherit | Pin a model id for this lane |
+| `lanes[].model` | string? | pi default | Pin a model id; omitted: pi's **configured default model** — not the dispatcher session's active model |
 | `lanes[].deadlineSec` | number? | `deadlineSec` config (900) | Leash in seconds; holds even if the dispatcher is gone. Minimum 1 |
 | `lanes[].tools` | string? | all tools | Tool allowlist for `--tools`, e.g. `"read,grep,find,ls,bash"` |
 | `lanes[].noExtensions` | boolean? | false | Pass `-ne` (drop extensions incl. MCP in the lane) |
-| `lanes[].mcp` | boolean? | reachable | Set `false` to pass `--no-mcp` (default: MCP reachable per exposure)
+| `lanes[].mcp` | boolean? | reachable | Set `false` to pass `--no-mcp` (default: MCP tools stay reachable per pi's tool-exposure rules) |
 | `workDir` | string? | `workDir` config (`.pi/work`) | Directory for manifest, events, and artifacts |
 
 **Result:** text summary plus `structuredContent` — `{ wave, manifestPath, lanes[] }`
@@ -45,7 +48,9 @@ fresh one after the dispatcher exited — sees the same truth.
 
 ### `status`
 
-Per-lane `structuredContent` entries:
+Per-lane `structuredContent` entries. Note: `settled` only means the
+`agent_settled` event was seen — success is `collect` returning
+`suspect: false`.
 
 | Field | Type | Meaning |
 |---|---|---|
@@ -72,12 +77,15 @@ re-adoption. Idempotent; honors tool-call cancellation during the grace wait.
 For each finished lane, writes the final assistant message (text blocks
 concatenated) to `<wave>-<name>.md`. Entries carry
 `{ name, artifact, suspect, stopReason }`; `suspect: true` when the lane
-failed, the message is empty, or the stop reason was not clean. Refuses lanes
-still running or never spawned.
+failed, the message is empty, or the stop reason was not clean. A refused
+lane (still running / never spawned) is a **successful** tool result carrying
+a per-lane `reason`, not an error.
 
 ## Configuration
 
-All knobs are configurable — nothing is hardcoded. JSON files, later wins:
+The lane protocol itself is fixed — every lane runs `--mode json --no-session
+-ns` (fresh process, JSON event stream, skills unloaded) — while every
+**variable** knob is configurable. JSON files, later wins:
 
 1. defaults (documented in the tables above)
 2. `<agent-dir>/pi-minimal-dispatch.json` — user level (`~/.pi/agent`, or `$PI_CODING_AGENT_DIR`)
@@ -88,7 +96,7 @@ All knobs are configurable — nothing is hardcoded. JSON files, later wins:
 |---|---|---|---|
 | `workDir` | string | `.pi/work` | Default wave directory |
 | `deadlineSec` | number | `900` | Default lane leash (integer ≥ 1) |
-| `killGraceMs` | number | `5000` | SIGTERM→SIGKILL grace in the `kill` action (integer ≥ 100) |
+| `killGraceMs` | number | `5000` | SIGTERM→SIGKILL grace in the `kill` action; also the leash's `timeout -k` escalation (integer ≥ 100) |
 | `pollMs` | number | `2000` | Statusbar poll interval (integer ≥ 100) |
 | `piBin` | string | `"pi"` | Lane pi binary, resolved from `PATH` |
 | `timeoutBin` | string | `"timeout"` | Leash binary — set `"gtimeout"` if coreutils isn't linked on macOS |
