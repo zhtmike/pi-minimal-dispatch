@@ -60,97 +60,26 @@ pi decides when to call the tools. The ceremony is:
 
 ## API
 
-### `dispatch`
+Two tools — full parameter, output, and configuration reference in
+[docs/API.md](docs/API.md).
 
-Spawns a wave and returns in under a second. Lanes run
-`<timeoutBin> <deadlineSec> <piBin> --mode json --no-session -ns [flags] @<brief>`
-detached, events streaming to `<workDir>/<wave>-<name>.events.jsonl`.
-
-| Parameter | Type | Default | Description |
-|---|---|---|---|
-| `wave` | string | — | Wave slug: `kebab-case`, max 64 chars, must not exist in `workDir` |
-| `lanes` | array | — | One entry per lane (min 1); lane slugs unique within the wave |
-| `lanes[].name` | string | — | Lane slug: `kebab-case`, max 64 chars |
-| `lanes[].briefPath` | string | — | Path to the lane's brief file (its `@file` prompt) |
-| `lanes[].model` | string? | inherit | Pin a model id for this lane |
-| `lanes[].deadlineSec` | number? | `deadlineSec` config (900) | Leash in seconds; holds even if the dispatcher is gone. Minimum 1 |
-| `lanes[].tools` | string? | all tools | Tool allowlist for `--tools`, e.g. `"read,grep,find,ls,bash"` |
-| `lanes[].noExtensions` | boolean? | false | Pass `-ne` (drop extensions incl. MCP in the lane) |
-| `lanes[].mcp` | boolean? | true | Set `false` to pass `--no-mcp` |
-| `workDir` | string? | `workDir` config (`.pi/work`) | Directory for manifest, events, and artifacts |
-
-**Result:** text summary plus `structuredContent` — `{ wave, manifestPath, lanes[] }`
-with each lane's pid, paths, and deadline. Spawned lanes stream events
-immediately; a lane that failed to spawn appears as `SPAWN ERROR: …`.
-
-**Errors** (the whole call fails, zero lanes spawned, no slug claimed):
-a brief file missing (all missing paths listed) · malformed or duplicate slugs ·
-wave slug already exists · `timeoutBin`/`piBin` not found on `PATH`.
-
-### `lanes`
-
-Stateless: every call reads the manifest fresh, so any session — including a
-fresh one after the dispatcher exited — sees the same truth.
-
-| Parameter | Type | Default | Description |
-|---|---|---|---|
-| `wave` | string | — | Wave slug |
-| `action` | string? | `"status"` | `"status"` \| `"kill"` \| `"collect"` |
-| `workDir` | string? | `workDir` config (`.pi/work`) | Directory holding the manifest |
-
-**`status`** — per-lane `structuredContent` entries:
-
-| Field | Type | Meaning |
-|---|---|---|
-| `name` | string | lane slug |
-| `state` | string | `starting` \| `running` \| `settled` \| `failed` |
-| `cause` | string? | for `failed`: `spawn` · `killed` · `deadline` · `crashed` |
-| `overdue` | boolean? | alive past its deadline (leash misfire) — informational |
-| `turns` | number | turn count so far |
-| `usage` | object | run totals summed over assistant messages: `{input, output, cacheRead, cacheWrite, cost}` |
-| `stopReason` | string? | last assistant stop reason (`stop` is clean) |
-| `lastEventAgeSec` | number? | seconds since the events file last grew — the stuck-lane signal |
-| `spawnError` | string? | why a `spawn`-failed lane never started |
-| `errTail` | string? | last lines of `.err` for `crashed` lanes |
-
-**`kill`** — SIGTERM to each eligible lane's process group (never a
-start-time-mismatched/reused PID; settled lanes skipped), SIGKILL after the
-`killGraceMs` config grace, then a manifest tombstone so the kill survives
-re-adoption. Idempotent; honors tool-call cancellation during the grace wait.
-
-**`collect`** — for each finished lane, writes the final assistant message
-(text blocks concatenated) to `<wave>-<name>.md`. Entries carry
-`{ name, artifact, suspect, stopReason }`; `suspect: true` when the lane
-failed, the message is empty, or the stop reason was not clean. Refuses lanes
-still running or never spawned.
+- **`dispatch`** `{wave, lanes[], workDir?}` — validate briefs and slugs, claim
+  the wave slug atomically, spawn every lane detached in its own process
+  group, return in under a second. Per-lane: `model`, `deadlineSec`, `tools`,
+  `noExtensions`, `mcp`.
+- **`lanes`** `{wave, action?, workDir?}` — stateless `status` / `kill` /
+  `collect` over the wave's manifest; any session can re-adopt a wave,
+  including after the dispatcher exited.
 
 ## Configuration
 
-All knobs are configurable — nothing is hardcoded. JSON files, later wins:
-
-1. defaults (documented in the tables above)
-2. `<agent-dir>/pi-minimal-dispatch.json` — user level (`~/.pi/agent`, or `$PI_CODING_AGENT_DIR`)
-3. `.pi/pi-minimal-dispatch.json` — project level (working directory)
-4. per-call tool parameters
-
-| Key | Type | Default | Description |
-|---|---|---|---|
-| `workDir` | string | `.pi/work` | Default wave directory |
-| `deadlineSec` | number | `900` | Default lane leash (integer ≥ 1) |
-| `killGraceMs` | number | `5000` | SIGTERM→SIGKILL grace in the `kill` action (integer ≥ 100) |
-| `pollMs` | number | `2000` | Statusbar poll interval (integer ≥ 100) |
-| `piBin` | string | `"pi"` | Lane pi binary, resolved from `PATH` |
-| `timeoutBin` | string | `"timeout"` | Leash binary — set `"gtimeout"` if coreutils isn't linked on macOS |
-
-```json
-{
-	"deadlineSec": 600,
-	"timeoutBin": "gtimeout"
-}
-```
-
-Invalid files fail loudly at the next tool call: the error names the file and
-the valid keys/values. Unknown keys are rejected.
+All knobs are configurable — nothing is hardcoded. Defaults come from the
+extension; user config `~/.pi/agent/pi-minimal-dispatch.json` and project
+config `.pi/pi-minimal-dispatch.json` override them, and per-call parameters
+win last: `workDir`, `deadlineSec` (900), `killGraceMs` (5000), `pollMs`
+(2000), `piBin`, `timeoutBin` (set `"gtimeout"` when coreutils isn't linked
+on macOS). Invalid files fail loudly at the next tool call. Full table and
+precedence rules: [docs/API.md](docs/API.md#configuration).
 
 ## Status bar & `/lanes`
 

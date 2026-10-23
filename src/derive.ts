@@ -1,7 +1,7 @@
 /**
  * pi-minimal-dispatch derived-state core — manifest registry, process
  * liveness, and lane state derivation. Pure Node builtins: importable and
- * testable without the pi host. Contract: README.md.
+ * testable without the pi host. Contract: README.md + docs/API.md.
  */
 
 import { execFileSync } from "node:child_process";

@@ -1,8 +1,8 @@
 # Contributing to pi-minimal-dispatch
 
 Thanks for your interest. This project is intentionally small — read
-[README.md](README.md) for the contract and [AGENTS.md](AGENTS.md) for the
-working rules before proposing changes.
+[README.md](README.md) and [docs/API.md](docs/API.md) for the contract and
+[AGENTS.md](AGENTS.md) for the working rules before proposing changes.
 
 ## Development
 
@@ -21,12 +21,12 @@ available.
 ## Ground rules
 
 - **Minimal surface.** New options, states, or actions must justify
-  themselves against the README's contract. Queueing, steering, and UI work
-  are non-goals.
+  themselves against the contract in [docs/API.md](docs/API.md). Queueing,
+  steering, and UI work are non-goals.
 - **Tests ship with the change.** Every behavior change adds or updates a unit
   test in the same PR.
-- **Docs stay in sync.** README, AGENTS.md, and the code must agree; a PR that
-  changes behavior updates the README in the same commit.
+- **Docs stay in sync.** README, docs/API.md, AGENTS.md, and the code must
+  agree; a PR that changes behavior updates the reference in the same commit.
 - **Commit style:** `[module] type: subject` (e.g. `[dispatch] fix: refuse
   duplicate lane names`), body explains the root cause.
 

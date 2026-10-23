@@ -6,9 +6,12 @@ Guidance for AI agents working in this repository.
 
 `pi-minimal-dispatch` is a [pi](https://pi.dev) extension (pi ≥ 1.4.0) with a
 deliberately small surface: two tools (`dispatch`, `lanes`), one manifest
-format, one derivation core. Read [README.md](README.md) first — it is the
-user-facing contract. When code and README disagree, that is a bug in one of
-them; fix the disagreement, not just the code.
+format, one derivation core. Read [README.md](README.md) first, then
+[docs/API.md](docs/API.md) — together they are the user-facing contract.
+When code and docs disagree, that is a bug in one of
+them; fix the disagreement, not just the code. The tool schemas in
+`src/index.ts` are the model-facing half of the same contract — keep the
+three in sync in the same change.
 
 ## Layout
 

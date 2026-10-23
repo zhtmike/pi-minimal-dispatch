@@ -2,7 +2,7 @@
  * pi-minimal-dispatch — detached lane dispatch with visible state (README.md).
  * `dispatch`: spawn a wave of detached `timeout … pi --mode json …` lanes, return immediately.
  * `lanes`: stateless status/kill/collect over the wave's manifest + event streams.
- * All knobs are configurable (README.md → Configuration); nothing is hardcoded.
+ * All knobs are configurable (docs/API.md → Configuration); nothing is hardcoded.
  */
 
 import { spawn } from "node:child_process";
