@@ -26,7 +26,7 @@ import {
 	writeManifestAtomic,
 } from "./derive.ts";
 import { formatStatusBarSummary, formatWaveStatus } from "./format.ts";
-import { type LaneParams, assertSlugs, buildLaneArgs, laneEnv, missingBriefs, resolveExecutable, selectKillTargets } from "./lane.ts";
+import { type LaneParams, assertLaneTools, assertSlugs, buildLaneArgs, laneEnv, missingBriefs, resolveExecutable, selectKillTargets } from "./lane.ts";
 
 /** Spawn one lane detached; a failure at any step becomes the record's spawnError, never a throw. */
 function spawnLane(workDir: string, wave: string, lane: LaneParams, cfg: DispatchConfig, timeoutBin: string): LaneRecord {
@@ -97,7 +97,8 @@ const dispatchTool = defineTool({
 		"process group, streaming JSON events to <workDir>/<wave>-<name>.events.jsonl. Lanes survive this " +
 		"session's exit. Write briefs first — one brief file per lane is the lane's entire prompt; " +
 		"lanes run in fresh processes (JSON event mode, no session) with skills unloaded (-ns), " +
-		"a read-only tool default, and never the dispatch tool itself. Every lane in the call is " +
+		"a read-only tool default, MCP reach only via a route named in tools (else set mcp: false), " +
+		"and never the dispatch tool itself. Every lane in the call is " +
 		"spawned — the caller bounds the wave. " +
 		"Then poll with the lanes tool; collect artifacts when settled.",
 	parameters: Type.Object({
@@ -108,9 +109,9 @@ const dispatchTool = defineTool({
 				briefPath: Type.String({ description: "Path to the lane's brief file (@file prompt)" }),
 				model: Type.Optional(Type.String({ description: "Pin a model id for this lane; omitted: pi's configured default model — not necessarily the dispatcher session's active model" })),
 				deadlineSec: Type.Optional(Type.Number({ description: "Deadline leash in seconds (config default: 900)", minimum: 1 })),
-				tools: Type.Optional(Type.String({ description: "Tool allowlist for --tools; omitted: 'read,grep,find,ls' — add 'bash' when a lane must run commands (bash can still invoke git)" })),
+				tools: Type.Optional(Type.String({ description: "Tool allowlist for --tools; omitted: 'read,grep,find,ls' — add 'bash' when a lane must run commands (bash can still invoke git). Plain names or mcp__/tool patterns only: +name/-name modifiers, shell quoting, and empty lists are rejected. With mcp enabled, MCP/web tools are reachable only through 'codemode' or 'tool_search' named here ('mcp__server__*' entries declare tools directly only for direct-exposure servers)" })),
 				noExtensions: Type.Optional(Type.Boolean({ description: "Pass -ne (drop extensions incl. MCP)" })),
-				mcp: Type.Optional(Type.Boolean({ description: "Set false to pass --no-mcp (default: MCP tools stay reachable per pi's tool-exposure rules)" })),
+				mcp: Type.Optional(Type.Boolean({ description: "Set false to pass --no-mcp (no MCP servers connect). Servers connecting alone grants no reach: with mcp enabled, tools must name 'codemode' or 'tool_search' or dispatch rejects the lane" })),
 			}),
 			{ minItems: 1 },
 		),
@@ -129,6 +130,9 @@ const dispatchTool = defineTool({
 		if (missing.length > 0) {
 			throw new Error(`brief file(s) not found: ${missing.join(", ")} — nothing spawned`);
 		}
+
+		// Tool contracts are validated before the manifest claim: a post-claim throw would strand the slug.
+		assertLaneTools(params.lanes);
 
 		// Claim the wave slug atomically; an existing manifest rejects it.
 		const manifestPath = manifestPathFor(workDir, params.wave);

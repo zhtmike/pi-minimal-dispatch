@@ -11,6 +11,16 @@ import type { LaneRecord } from "./derive.ts";
 
 export const SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
+/** Tool allowlist used when a lane omits `tools` — read-only by design. */
+export const DEFAULT_LANE_TOOLS = "read,grep,find,ls";
+
+/**
+ * Tools that route a lane to MCP tools whatever the servers' exposure —
+ * `mcp__` entries and the resource tools declare tools only under `direct`
+ * exposure (pi waits for those), which dispatch cannot know in advance.
+ */
+const MCP_REACH_TOOLS = ["codemode", "tool_search"];
+
 /** Lane parameters as they arrive from the dispatch tool. */
 export type LaneParams = {
 	name: string;
@@ -58,6 +68,65 @@ export function resolveExecutable(name: string): string {
 	throw new Error(`executable '${name}' not found on PATH`);
 }
 
+/** Parse a `tools` string exactly as pi parses `--tools`: split on commas, trim, drop empties. */
+export function toolEntries(lane: LaneParams): string[] {
+	return (lane.tools ?? DEFAULT_LANE_TOOLS)
+		.split(",")
+		.map((s) => s.trim())
+		.filter((e) => e !== "");
+}
+
+/** Whether a `--tools` entry matches a tool name — exact, or a `*` pattern anchored both ends (pi's matcher). */
+function entryMatches(entry: string, name: string): boolean {
+	if (!entry.includes("*")) return entry === name;
+	const source = entry.split("*").map((p) => p.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join(".*");
+	return new RegExp(`^${source}$`).test(name);
+}
+
+/**
+ * Validate every lane's `tools` at the tool boundary. An allowlist names plain
+ * tools or `*` patterns — `+name`/`-name` lists are not allowlists: pi applies
+ * them to its default selection and would silently grant `bash`/`edit`/`write`.
+ * A lane that leaves MCP enabled must name `codemode` or `tool_search`, else
+ * its connected servers stay unreachable dead weight.
+ */
+export function assertLaneTools(lanes: LaneParams[]): void {
+	const problems: string[] = [];
+	for (const lane of lanes) {
+		const entries = toolEntries(lane);
+		const modifiers = entries.filter((e) => e.startsWith("+") || e.startsWith("-"));
+		if (modifiers.length > 0) {
+			problems.push(
+				`lane '${lane.name}': tools must be a plain allowlist, not +name/-name modifiers (${modifiers.join(", ")}) — ` +
+					"modifiers apply to pi's default selection and silently grant bash/edit/write; list every tool instead",
+			);
+			continue;
+		}
+		const quoted = entries.filter((e) => e.includes("'") || e.includes('"'));
+		if (quoted.length > 0) {
+			problems.push(
+				`lane '${lane.name}': tools entries must not carry shell quoting (${quoted.join(", ")}) — ` +
+					"the allowlist is one argv value and pi takes entries verbatim, so a quoted name matches no tool; write read, not 'read'",
+			);
+			continue;
+		}
+		if (entries.length === 0) {
+			problems.push(`lane '${lane.name}': tools allowlist is empty — name at least one tool`);
+			continue;
+		}
+		if (lane.mcp === false || lane.noExtensions === true) continue; // MCP never connects
+		const hasRoute = entries.some((e) => MCP_REACH_TOOLS.some((t) => entryMatches(e, t)));
+		if (!hasRoute) {
+			problems.push(
+				`lane '${lane.name}': MCP left enabled but tools '${lane.tools ?? DEFAULT_LANE_TOOLS}' grants no route to MCP tools — ` +
+					"name 'codemode' or 'tool_search' (an 'mcp__server__*' entry alone reaches only direct-exposure servers; pair it with codemode), " +
+					"or set mcp:false — entries reach pi verbatim, no shell quoting",
+			);
+		}
+	}
+	if (problems.length > 0) throw new Error(problems.join("\n"));
+}
+
 /**
  * Build the lane argv: `timeout -k <graceSec> <deadlineSec> pi --mode json
  * --no-session -ns [flags] @<brief>`. The json/no-session/-ns triple is the
@@ -78,7 +147,7 @@ export function buildLaneArgs(lane: LaneParams, cfg: Pick<DispatchConfig, "piBin
 		"-ns",
 		...(lane.noExtensions ? ["-ne"] : []),
 		"--tools",
-		lane.tools ?? "read,grep,find,ls",
+		lane.tools ?? DEFAULT_LANE_TOOLS,
 		...(lane.mcp === false ? ["--no-mcp"] : []),
 		...(lane.model ? ["--model", lane.model] : []),
 		`@${path.resolve(lane.briefPath)}`,

@@ -7,7 +7,8 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { assertSlugs, buildLaneArgs, laneEnv, missingBriefs, resolveExecutable, selectKillTargets } from "../src/lane.ts";
+import { DEFAULT_LANE_TOOLS, assertLaneTools, assertSlugs, buildLaneArgs, laneEnv, missingBriefs, resolveExecutable, selectKillTargets, toolEntries } from "../src/lane.ts";
+import type { LaneParams } from "../src/lane.ts";
 import type { LaneRecord } from "../src/derive.ts";
 
 let failures = 0;
@@ -96,6 +97,72 @@ check(
 		delete process.env.TEST_MARKER;
 		return ok;
 	})(),
+);
+
+// --- assertLaneTools -------------------------------------------------------
+
+const L = (name: string, over: Partial<LaneParams> = {}): LaneParams => ({ name, briefPath: "b.md", ...over });
+
+check("lane tools: default is the read-only allowlist", DEFAULT_LANE_TOOLS === "read,grep,find,ls");
+check(
+	"lane tools: parsing mirrors pi (split commas, trim, drop empties)",
+	(() => {
+		const a = toolEntries(L("x", { tools: "read, bash ,mcp__web__*" }));
+		const b = toolEntries(L("x", { tools: " , " }));
+		return a.join("|") === "read|bash|mcp__web__*" && b.length === 0;
+	})(),
+);
+check(
+	"lane tools: default lane (no tools, mcp on) is rejected as blind",
+	throwsWith(() => assertLaneTools([L("web")]), "lane 'web'") && throwsWith(() => assertLaneTools([L("web")]), "no route to MCP tools"),
+);
+check(
+	"lane tools: rejection names both remedies",
+	throwsWith(() => assertLaneTools([L("web")]), "codemode") && throwsWith(() => assertLaneTools([L("web")]), "mcp:false"),
+);
+check("lane tools: mcp:false default tools pass", (() => { assertLaneTools([L("a", { mcp: false }), L("b", { tools: "read,bash", mcp: false })]); return true; })());
+check("lane tools: noExtensions:true skips the reach check", (() => { assertLaneTools([L("a", { noExtensions: true })]); return true; })());
+check(
+	"lane tools: every exposure-independent reach route passes with mcp enabled",
+	(() => {
+		for (const tools of [
+			"read,grep,find,ls,codemode",
+			"read,tool_search",
+			"read,grep,find,ls,codemode,mcp__websearch__*", // entry scopes a direct-exposure server
+			"read,*", // catch-all pattern names codemode too
+			"read, codemode", // trimmed like pi
+		]) {
+			assertLaneTools([L("x", { tools })]);
+		}
+		return true;
+	})(),
+);
+check(
+	"lane tools: mcp__ entries alone are not a route (exposure-dependent)",
+	throwsWith(() => assertLaneTools([L("web", { tools: "read,grep,find,ls,mcp__websearch__*" })]), "direct-exposure") &&
+		throwsWith(() => assertLaneTools([L("web", { tools: "read,mcp__websearch__web_search" })]), "no route to MCP tools") &&
+		throwsWith(() => assertLaneTools([L("web", { tools: "read,mcp*" })]), "no route to MCP tools") &&
+		throwsWith(() => assertLaneTools([L("web", { tools: "read,read_mcp_resource" })]), "no route to MCP tools"),
+);
+check(
+	"lane tools: shell-quoted entries are rejected even offline",
+	throwsWith(() => assertLaneTools([L("x", { tools: "'read','bash'", mcp: false })]), "shell quoting") &&
+		throwsWith(() => assertLaneTools([L("web", { tools: "read,grep,find,ls,'mcp__websearch__*'" })]), "shell quoting"),
+);
+check(
+	"lane tools: +name/-name modifiers are rejected as silent widening",
+	throwsWith(() => assertLaneTools([L("x", { tools: "+codemode" })]), "+name/-name modifiers") &&
+		throwsWith(() => assertLaneTools([L("x", { tools: "+codemode" })]), "bash/edit/write") &&
+		throwsWith(() => assertLaneTools([L("x", { tools: "read,-write", mcp: false })]), "+name/-name modifiers"),
+);
+check(
+	"lane tools: empty allowlist is rejected",
+	throwsWith(() => assertLaneTools([L("x", { tools: "" })]), "empty") && throwsWith(() => assertLaneTools([L("x", { tools: " , " })]), "empty"),
+);
+check(
+	"lane tools: every offending lane is listed in one error",
+	throwsWith(() => assertLaneTools([L("a", { mcp: false }), L("b"), L("c")]), "lane 'b'") &&
+		throwsWith(() => assertLaneTools([L("a", { mcp: false }), L("b"), L("c")]), "lane 'c'"),
 );
 
 // --- selectKillTargets ------------------------------------------------------

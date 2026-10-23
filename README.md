@@ -68,7 +68,7 @@ pi decides when to call the tools. A real session looks like:
 
 ```text
 > dispatch  wave="survey" lanes=[{name:"docs", briefPath:".pi/work/survey-docs-brief.md",
-            model:"zai/glm-5.3-flash", deadlineSec:600}]
+            model:"zai/glm-5.3-flash", deadlineSec:600, mcp:false}]
   wave 'survey' dispatched — 1/1 lanes spawned
     docs: pid 99015 (deadline 600s)
   manifest: /abs/path/to/.pi/work/survey-manifest.json
@@ -84,6 +84,18 @@ pi decides when to call the tools. A real session looks like:
 The ceremony is *write briefs → `dispatch` → poll `lanes status` → `collect` →
 clean up*. For a quick single task: dispatch one lane, poll once after the
 expected duration, collect — there is deliberately no blocking mode.
+
+**Web/MCP reach**: the default lane is offline. MCP servers connecting grants
+nothing by themselves — a lane reaches their tools only through `codemode` or
+`tool_search` named in its `tools` (`codemode` scripts and `tool_search` wait
+for the servers they need; an `mcp__server__*` entry declares tools directly
+only when the server has `direct` exposure in `mcp.json`, so it is a scope,
+not a route). A lane that leaves MCP enabled without `codemode`/`tool_search`
+in `tools` would run blind, so `dispatch` rejects it — pass a route or set
+`mcp: false` (servers never connect). Entries reach pi verbatim, no shell
+quoting: `tools: "read,grep,find,ls,codemode"`. Plain names/patterns only:
+`+name`/`-name` modifier lists (which pi applies to its default selection,
+silently granting `bash`/`edit`/`write`) and empty lists are rejected too.
 
 **Steering** is kill + redispatch: briefs are files, so refine the brief and run
 a new wave (slugs are single-use). **Hang detection**: `lastEventAgeSec` is the

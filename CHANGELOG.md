@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- `dispatch` no longer spawns blind MCP lanes: with MCP enabled, a lane whose
+  `tools` allowlist names neither `codemode` nor `tool_search` is rejected at
+  the tool boundary — pi's `--tools` allowlist replaces the whole selection,
+  and a lane never reaches MCP tools through anything else unless the server
+  has `direct` exposure (which dispatch cannot know). Pass `codemode`/
+  `tool_search` in `tools` or set `mcp: false`.
+- `tools` now accepts only a plain allowlist: `+name`/`-name` modifier lists
+  (pi applies them to its default selection, silently granting
+  `bash`/`edit`/`write`) and empty lists are rejected.
+- README and docs/API.md document the reach rule and both reach recipes; the
+  `mcp` schema text no longer claims MCP tools "stay reachable" by default.
+
 ## 0.1.0 — 2026-10-23
 
 Initial release. Requires pi ≥ 1.3.0 (1.4.0 recommended — see README).

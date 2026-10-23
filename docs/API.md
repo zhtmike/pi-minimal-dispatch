@@ -22,9 +22,9 @@ the leash. Events stream to `<workDir>/<wave>-<name>.events.jsonl`.
 | `lanes[].briefPath` | string | — | Path to the lane's brief file (its `@file` prompt) |
 | `lanes[].model` | string? | pi default | Pin a model id; omitted: pi's **configured default model** — not the dispatcher session's active model |
 | `lanes[].deadlineSec` | number? | `deadlineSec` config (900) | Leash in seconds; holds even if the dispatcher is gone. Minimum 1 |
-| `lanes[].tools` | string? | `read,grep,find,ls` | Tool allowlist for `--tools`; add `bash` when a lane must run commands (bash can still invoke git) |
+| `lanes[].tools` | string? | `read,grep,find,ls` | Tool allowlist for `--tools` — plain names or `*` patterns; no `+name`/`-name` modifiers, no shell quoting, not empty. Add `bash` when a lane must run commands (bash can still invoke git). With MCP enabled, reach requires `codemode` or `tool_search` here — see [MCP and web reach](#mcp-and-web-reach) |
 | `lanes[].noExtensions` | boolean? | false | Pass `-ne` (drop extensions incl. MCP in the lane) |
-| `lanes[].mcp` | boolean? | reachable | Set `false` to pass `--no-mcp` (default: MCP tools stay reachable per pi's tool-exposure rules) |
+| `lanes[].mcp` | boolean? | enabled | Set `false` to pass `--no-mcp` (no MCP servers connect). With MCP enabled, `tools` must name `codemode` or `tool_search` or the call is rejected — servers connecting alone never declares MCP tools to the lane |
 | `workDir` | string? | `workDir` config (`.pi/work`) | Directory for manifest, events, and artifacts |
 
 **Result:** text summary plus `structuredContent` — `{ wave, manifestPath, lanes[] }`
@@ -33,7 +33,38 @@ immediately; a lane that failed to spawn appears as `SPAWN ERROR: …`.
 
 **Errors** (the whole call fails, zero lanes spawned, no slug claimed):
 a brief file missing (all missing paths listed) · malformed or duplicate slugs ·
-wave slug already exists · `timeoutBin`/`piBin` not found on `PATH`.
+`tools` that is not a plain allowlist (`+name`/`-name` modifiers, shell quoting,
+or an empty list) · a lane leaving MCP enabled while its `tools` names neither
+`codemode` nor `tool_search` · wave slug already exists · `timeoutBin`/`piBin`
+not found on `PATH`.
+
+### MCP and web reach
+
+`mcp` only controls whether servers connect; it never grants reach. A plain
+`--tools` allowlist replaces the whole selection, and pi declares a server's
+tools to the lane only through the routes below — anything else leaves
+connected servers as unreachable dead weight, so `dispatch` rejects a lane
+that leaves MCP enabled without one:
+
+- `codemode` — scripts reach every non-hidden server's tools and wait for the
+  servers they name: `tools: "read,grep,find,ls,codemode"`
+- `tool_search` — loads non-direct MCP tools on demand, waiting for all
+  servers when it runs
+
+An `mcp__server__*` entry is a *scope*, not a route: it keeps only that
+server's tools registered (for `codemode`/`tool_search` to use) and declares
+them directly **only when the server or tool has `direct` exposure** in
+`mcp.json` (`"exposure": "direct"` / `toolExposure`) — dispatch cannot know
+the lane's server exposures, so `mcp__` entries alone never satisfy the rule.
+For direct-exposure servers: `tools: "read,grep,find,ls,codemode,mcp__server__*"`
+declares the tools and keeps them callable from scripts. The MCP resource
+tools (`list_mcp_resources`, `list_mcp_resource_templates`,
+`read_mcp_resource`) are exposure-gated the same way and do not count either.
+
+Lanes that need no MCP set `mcp: false`. Entries reach pi verbatim (the
+allowlist is one argv value — no shell quoting), and `+name`/`-name` modifier
+lists are rejected because pi applies them to its default selection, silently
+granting `bash`/`edit`/`write`.
 
 **Recursion guard:** lanes run with `PI_MINIMAL_DISPATCH_CHILD=1` in their
 environment, and the extension's factory stays out of any process carrying that
