@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.1 — 2026-10-26
+
+- Status lines (`lanes` status/wait, `/lanes`) tag each lane with its model:
+  `[short-id think:level]` after the name — provider prefix dropped, thinking
+  level only when set. The tag shows the actual model from the lane's last
+  assistant message, falling back to the pinned value until the first answer;
+  `LaneStatus` carries `model`/`thinkingLevel` (full ids) for structured
+  consumers.
+- `dispatch`'s `model` param documents pi's `id:thinking` suffix
+  (e.g. `zai/glm-4.6:high`), which the tag renders split off the id.
+
 ## 0.2.0 — 2026-10-23
 
 Requires pi ≥ 1.4.0 (the MCP reach rules the validator encodes are pi
