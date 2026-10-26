@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.1 — 2026-10-26
 
 - Status tags never go silent: an assistant `message_start` reveals the
   answering model the moment generation begins (pi builds the message with
