@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.0 — 2026-10-26
+
+- `dispatch` lanes accept `thinking` — pin a lane's thinking level
+  (`off`…`max`, pi's `--thinking` vocabulary) independently of `model`.
+  Precedence mirrors pi: an explicit `thinking` wins over any `id:thinking`
+  suffix on `model`; the pinned level shows in status tags until the lane's
+  first answer.
+- CI/CD: GitHub Actions `Tests` (zero-install unit tests on the exact node
+  floor, host-API typecheck against pi 1.4.0, latest-pi canary) and
+  `Release` (tag-driven, guarded, `npm publish --provenance` via OIDC
+  trusted publishing). The repo stays dependency-free — CI toolchains
+  install ephemerally.
+
 ## 0.2.1 — 2026-10-26
 
 - Status lines (`lanes` status/wait, `/lanes`) tag each lane with its model:

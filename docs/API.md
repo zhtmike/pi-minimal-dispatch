@@ -21,6 +21,7 @@ the leash. Events stream to `<workDir>/<wave>-<name>.events.jsonl`.
 | `lanes[].name` | string | — | Lane slug: `kebab-case`, max 64 chars |
 | `lanes[].briefPath` | string | — | Path to the lane's brief file (its `@file` prompt) |
 | `lanes[].model` | string? | pi default | Pin a model id; omitted: pi's **configured default model** — not the dispatcher session's active model. Accepts pi's `id:thinking` suffix (e.g. `zai/glm-4.6:high`) |
+| `lanes[].thinking` | `off\|minimal\|low\|medium\|high\|xhigh\|max`? | none | Pin a thinking level (pi's `--thinking`); wins over any `:level` suffix in `model` |
 | `lanes[].deadlineSec` | number? | `deadlineSec` config (900) | Leash in seconds; holds even if the dispatcher is gone. Minimum 1 |
 | `lanes[].tools` | string? | `read,grep,find,ls` | Tool allowlist for `--tools` — plain names or `*` patterns; no `+name`/`-name` modifiers, no shell quoting, not empty. Add `bash` when a lane must run commands (bash can still invoke git). With MCP enabled, reach requires `codemode` or `tool_search` here — see [MCP and web reach](#mcp-and-web-reach) |
 | `lanes[].noExtensions` | boolean? | false | Pass `-ne` (drop extensions incl. MCP in the lane) |
@@ -99,7 +100,7 @@ Per-lane `structuredContent` entries. Note: `settled` only means the
 | `turns` | number | turn count so far |
 | `usage` | object | run totals summed over assistant messages: `{input, output, cacheRead, cacheWrite, cost}` |
 | `model` | string? | model answering the last assistant message; until the first assistant message, the pinned model with pi's `:thinking` suffix split off (last colon, valid level word only) |
-| `thinkingLevel` | string? | thinking level of the last assistant message (`off`–`max`) — absent for models without thinking |
+| `thinkingLevel` | string? | thinking level of the last assistant message (`off`–`max`); until the first assistant message, the pinned level — explicit `thinking` over the model's `:level` suffix |
 | `stopReason` | string? | last assistant stop reason (`stop` is clean) |
 | `lastEventAgeSec` | number? | seconds since the events file last grew — the stuck-lane signal |
 | `spawnError` | string? | why a `spawn`-failed lane never started |

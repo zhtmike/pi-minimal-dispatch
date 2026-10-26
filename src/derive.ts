@@ -19,6 +19,8 @@ export type LaneRecord = {
 	startedAt: string; // ISO, stamped at creation
 	deadlineSec: number;
 	model?: string;
+	/** Pinned thinking level from the dispatch call; wins over the model's `:level` suffix. */
+	thinking?: string;
 	tools?: string;
 	spawned: boolean;
 	spawnError?: string;
@@ -47,7 +49,7 @@ export type LaneStatus = {
 	usage: Usage;
 	/** Model answering the last assistant message; before the first, the pinned model (pi's `id:thinking` suffix split off). */
 	model?: string;
-	/** Thinking level of the last assistant message; absent for models without thinking. */
+	/** Thinking level of the last assistant message; before the first, the pinned level (explicit `thinking` over the model's suffix). */
 	thinkingLevel?: string;
 	stopReason?: string;
 	lastEventAgeSec: number | null;
@@ -117,8 +119,8 @@ function errTailFor(lane: LaneRecord): string | undefined {
 
 /** Derive a lane's status from its events file, PID liveness, and manifest facts. Never stored. */
 export function deriveLane(lane: LaneRecord, now: number): LaneStatus {
-	// pi's --model splits a `:thinking` suffix only on the last colon and only for a valid
-	// level word (model-resolver's nSuffix) — ids like `qwen/qwen3-coder:exacto` keep their colon.
+	// Precedence mirrors pi: an explicit --thinking beats the model's `:thinking` suffix, which
+	// splits only on the last colon and a valid level word (ids like `qwen3-coder:exacto` keep it).
 	const pinned = lane.model?.match(/^(.+):(off|minimal|low|medium|high|xhigh|max)$/);
 	const base: LaneStatus = {
 		name: lane.name,
@@ -126,7 +128,7 @@ export function deriveLane(lane: LaneRecord, now: number): LaneStatus {
 		turns: 0,
 		usage: emptyUsage(),
 		model: pinned?.[1] ?? lane.model,
-		thinkingLevel: pinned?.[2],
+		thinkingLevel: lane.thinking ?? pinned?.[2],
 		lastEventAgeSec: null,
 	};
 

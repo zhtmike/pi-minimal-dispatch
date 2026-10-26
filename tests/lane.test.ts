@@ -71,7 +71,7 @@ else process.env.PATH = prevPath;
 // --- buildLaneArgs ----------------------------------------------------------
 
 const cfg = { piBin: "pi" };
-const lane = { name: "x", briefPath: "b.md", model: "m1", deadlineSec: 42, tools: "read,bash", noExtensions: true, mcp: false };
+const lane = { name: "x", briefPath: "b.md", model: "m1", thinking: "high", deadlineSec: 42, tools: "read,bash", noExtensions: true, mcp: false };
 const args = buildLaneArgs(lane, cfg, 42, 5);
 check(
 	"argv: -k grace, deadline, fixed protocol, flags, resolved brief",
@@ -79,6 +79,7 @@ check(
 		args.slice(4, 8).join(" ") === "--mode json --no-session -ns" &&
 		args.includes("-ne") && args.includes("--tools") && args[args.indexOf("--tools") + 1] === "read,bash" &&
 		args.includes("--no-mcp") && args.includes("--model") && args[args.indexOf("--model") + 1] === "m1" &&
+		args.includes("--thinking") && args[args.indexOf("--thinking") + 1] === "high" &&
 		args[args.length - 1] === `@${path.resolve("b.md")}`,
 	JSON.stringify(args),
 );
@@ -87,6 +88,12 @@ check(
 	"argv: omitted tools defaults to the read-only allowlist",
 	bare[bare.indexOf("--tools") + 1] === "read,grep,find,ls" && bare.length === 11,
 	JSON.stringify(bare),
+);
+const both = buildLaneArgs({ name: "x", briefPath: "b.md", model: "m1:low", thinking: "high" }, cfg, 900, 5);
+check(
+	"argv: thinking passes through beside a `:level` model suffix (pi resolves precedence)",
+	both[both.indexOf("--model") + 1] === "m1:low" && both[both.indexOf("--thinking") + 1] === "high",
+	JSON.stringify(both),
 );
 check(
 	"child env: carries the lane marker over the parent env",

@@ -133,6 +133,13 @@ check(
 	JSON.stringify(s),
 );
 
+s = deriveLane(lane({ pid: deadPid, model: "zai/glm-4.6:low", thinking: "high" }), Date.now());
+check(
+	"thinking fallback: explicit pin wins over the model's `:level` suffix (pi precedence)",
+	s.model === "zai/glm-4.6" && s.thinkingLevel === "high",
+	JSON.stringify(s),
+);
+
 s = deriveLane(lane({ pid: deadPid, model: "openrouter/qwen/qwen3-coder:exacto" }), Date.now());
 check(
 	"model fallback: a colon suffix that is not a level word stays part of the id",

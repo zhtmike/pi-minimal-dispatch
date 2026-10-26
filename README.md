@@ -104,8 +104,8 @@ Two tools — full parameter, output, and configuration reference in
 
 - **`dispatch`** `{wave, lanes[], workDir?}` — validate briefs and slugs, claim
   the wave slug atomically, spawn every lane detached in its own process
-  group, return in under a second. Per-lane: `model`, `deadlineSec`, `tools`,
-  `noExtensions`, `mcp`.
+  group, return in under a second. Per-lane: `model`, `thinking`,
+  `deadlineSec`, `tools`, `noExtensions`, `mcp`.
 - **`lanes`** `{wave, action?, waitSec?, workDir?}` — stateless `status` /
   `wait` / `kill` / `collect` over the wave's manifest; any session can re-adopt
   a wave, including after the dispatcher exited.

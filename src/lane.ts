@@ -26,6 +26,8 @@ export type LaneParams = {
 	name: string;
 	briefPath: string;
 	model?: string;
+	/** pi's --thinking vocabulary; wins over any `:level` suffix on model. */
+	thinking?: string;
 	deadlineSec?: number;
 	tools?: string;
 	noExtensions?: boolean;
@@ -150,6 +152,7 @@ export function buildLaneArgs(lane: LaneParams, cfg: Pick<DispatchConfig, "piBin
 		lane.tools ?? DEFAULT_LANE_TOOLS,
 		...(lane.mcp === false ? ["--no-mcp"] : []),
 		...(lane.model ? ["--model", lane.model] : []),
+		...(lane.thinking ? ["--thinking", lane.thinking] : []),
 		`@${path.resolve(lane.briefPath)}`,
 	];
 }
