@@ -108,7 +108,7 @@ const dispatchTool = defineTool({
 			Type.Object({
 				name: Type.String({ description: "Lane slug (kebab-case, max 64 chars, unique within the wave)" }),
 				briefPath: Type.String({ description: "Path to the lane's brief file (@file prompt)" }),
-				model: Type.Optional(Type.String({ description: "Pin a model id for this lane; omitted: pi's configured default model — not necessarily the dispatcher session's active model" })),
+				model: Type.Optional(Type.String({ description: "Pin a model id for this lane; omitted: pi's configured default model — not necessarily the dispatcher session's active model. Accepts pi's `id:thinking` suffix (e.g. 'zai/glm-4.6:high')" })),
 				deadlineSec: Type.Optional(Type.Number({ description: "Deadline leash in seconds (config default: 900)", minimum: 1 })),
 				tools: Type.Optional(Type.String({ description: "Tool allowlist for --tools; omitted: 'read,grep,find,ls' — add 'bash' when a lane must run commands (bash can still invoke git). Plain names or mcp__/tool patterns only: +name/-name modifiers, shell quoting, and empty lists are rejected. With mcp enabled, MCP/web tools are reachable only through 'codemode' or 'tool_search' named here ('mcp__server__*' entries declare tools directly only for direct-exposure servers)" })),
 				noExtensions: Type.Optional(Type.Boolean({ description: "Pass -ne (drop extensions incl. MCP)" })),
@@ -209,6 +209,7 @@ const lanesTool = defineTool({
 	description:
 		"Observe/control a dispatched wave. action=status (default): per-lane derived state " +
 		"(starting/running/settled/failed + cause spawn|killed|deadline|crashed), turns, run-total usage, " +
+		"model + thinking level (actual, from the last assistant message; pinned value before the first), " +
 		"stopReason, last-event age, .err tail for crashed lanes. action=wait: hold this call open, " +
 		"re-deriving at the pollMs cadence, until every lane is settled/failed or waitSec (default 300, " +
 		"max 3600) elapses — then return the status table; replaces blind sleep-then-status polling. " +

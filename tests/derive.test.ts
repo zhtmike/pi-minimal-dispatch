@@ -48,8 +48,8 @@ const deadPid = dead.pid!;
 
 const session = JSON.stringify({ type: "session", id: "s" });
 const turn = JSON.stringify({ type: "turn_start" });
-const assistantEnd = (usage: object, stopReason: string) =>
-	JSON.stringify({ type: "message_end", message: { role: "assistant", stopReason, usage, content: [] } });
+const assistantEnd = (usage: object, stopReason: string, extra: object = {}) =>
+	JSON.stringify({ type: "message_end", message: { role: "assistant", stopReason, usage, content: [], ...extra } });
 
 // --- parseEvents -----------------------------------------------------------
 
@@ -111,6 +111,41 @@ check("killed: tombstone wins over deadline", s.state === "failed" && s.cause ==
 writeEvents([session]);
 s = deriveLane(lane({ spawned: false, spawnError: "ENOENT pi" }), Date.now());
 check("spawn failure surfaces as failed/spawn", s.state === "failed" && s.cause === "spawn" && s.spawnError === "ENOENT pi");
+
+// --- model + thinkingLevel -------------------------------------------------
+
+writeEvents([session, turn,
+	assistantEnd({ input: 1 }, "toolUse", { model: "zai/glm-4.6", thinkingLevel: "high" }),
+	assistantEnd({ input: 1 }, "stop", { model: "zai/glm-5.3-flash" }),
+]);
+s = deriveLane(lane({ pid: deadPid }), Date.now());
+check(
+	"model: last assistant message wins; a message without thinkingLevel clears it",
+	s.model === "zai/glm-5.3-flash" && s.thinkingLevel === undefined,
+	JSON.stringify(s),
+);
+
+writeEvents([session]);
+s = deriveLane(lane({ pid: deadPid, model: "zai/glm-4.6:high" }), Date.now());
+check(
+	"model fallback: pinned `:thinking` suffix split off",
+	s.model === "zai/glm-4.6" && s.thinkingLevel === "high",
+	JSON.stringify(s),
+);
+
+s = deriveLane(lane({ pid: deadPid, model: "openrouter/qwen/qwen3-coder:exacto" }), Date.now());
+check(
+	"model fallback: a colon suffix that is not a level word stays part of the id",
+	s.model === "openrouter/qwen/qwen3-coder:exacto" && s.thinkingLevel === undefined,
+	JSON.stringify(s),
+);
+
+s = deriveLane(lane({ pid: deadPid, model: "zai/glm-4.6" }), Date.now());
+check(
+	"model fallback: plain pinned id passes through; unpinned stays undefined",
+	s.model === "zai/glm-4.6" && s.thinkingLevel === undefined && deriveLane(lane({ pid: deadPid }), Date.now()).model === undefined,
+	JSON.stringify(s),
+);
 
 // --- pidAlive reuse guard --------------------------------------------------
 

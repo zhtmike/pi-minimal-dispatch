@@ -45,6 +45,10 @@ export type LaneStatus = {
 	overdue?: boolean;
 	turns: number;
 	usage: Usage;
+	/** Model answering the last assistant message; before the first, the pinned model (pi's `id:thinking` suffix split off). */
+	model?: string;
+	/** Thinking level of the last assistant message; absent for models without thinking. */
+	thinkingLevel?: string;
 	stopReason?: string;
 	lastEventAgeSec: number | null;
 	spawnError?: string;
@@ -113,11 +117,16 @@ function errTailFor(lane: LaneRecord): string | undefined {
 
 /** Derive a lane's status from its events file, PID liveness, and manifest facts. Never stored. */
 export function deriveLane(lane: LaneRecord, now: number): LaneStatus {
+	// pi's --model splits a `:thinking` suffix only on the last colon and only for a valid
+	// level word (model-resolver's nSuffix) — ids like `qwen/qwen3-coder:exacto` keep their colon.
+	const pinned = lane.model?.match(/^(.+):(off|minimal|low|medium|high|xhigh|max)$/);
 	const base: LaneStatus = {
 		name: lane.name,
 		state: "failed",
 		turns: 0,
 		usage: emptyUsage(),
+		model: pinned?.[1] ?? lane.model,
+		thinkingLevel: pinned?.[2],
 		lastEventAgeSec: null,
 	};
 
@@ -135,6 +144,12 @@ export function deriveLane(lane: LaneRecord, now: number): LaneStatus {
 			base.usage.cacheWrite += u.cacheWrite ?? 0;
 			base.usage.cost += u.cost?.total ?? 0;
 			if (typeof message.stopReason === "string") base.stopReason = message.stopReason;
+			// The last assistant message is authoritative for identity — a message without
+			// thinkingLevel (model switch to a non-thinking model) clears a stale level.
+			if (typeof message.model === "string") {
+				base.model = message.model;
+				base.thinkingLevel = typeof message.thinkingLevel === "string" ? message.thinkingLevel : undefined;
+			}
 		}
 	}
 	if (fs.existsSync(lane.eventsPath)) {

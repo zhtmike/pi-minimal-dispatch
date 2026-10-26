@@ -7,7 +7,11 @@ import type { LaneStatus } from "./derive.ts";
 
 /** One status-table line per lane (two-space indent, err tail four-space indented). */
 export function formatLaneLine(s: LaneStatus): string {
-	const bits = [s.name, s.state];
+	// Short form: provider prefix dropped, thinking level labeled `think:` (a bare level word
+	// reads like a model variant) — the full ids live in the structured status payload.
+	const id = s.model ? s.model.split("/").pop() : undefined;
+	const tag = id === undefined ? "" : ` [${id}${s.thinkingLevel !== undefined ? ` think:${s.thinkingLevel}` : ""}]`;
+	const bits = [`${s.name}${tag}`, s.state];
 	if (s.cause) bits.push(`(${s.cause}${s.spawnError ? `: ${s.spawnError}` : ""})`);
 	if (s.overdue) bits.push("OVERDUE");
 	bits.push(s.turns === 1 ? "1 turn" : `${s.turns} turns`);

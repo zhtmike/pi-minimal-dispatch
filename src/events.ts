@@ -18,6 +18,8 @@ export type ContentBlock = { type: string; text?: string; thinking?: string };
 export type StreamMessage = {
 	role: string;
 	stopReason?: string;
+	model?: string;
+	thinkingLevel?: string;
 	usage?: UsageDelta;
 	content?: ContentBlock[];
 };

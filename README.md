@@ -10,8 +10,8 @@ never guessed from empty files.
 
 ```
 wave 'survey':
-  docs   · running · 2 turns · tok 5703in/90out, $0.0009 · stop:toolUse · last 3.1s ago
-  review · settled · 4 turns · tok 12021in/310out, $0.0041 · stop:stop · last 12s ago
+  docs [glm-4.6 think:high] · running · 2 turns · tok 5703in/90out, $0.0009 · stop:toolUse · last 3.1s ago
+  review [glm-5.3-flash] · settled · 4 turns · tok 12021in/310out, $0.0041 · stop:stop · last 12s ago
 ```
 
 ## Why
@@ -75,8 +75,8 @@ pi decides when to call the tools. A real session looks like:
   manifest: /abs/path/to/.pi/work/survey-manifest.json
 
 > lanes     wave="survey" action="wait"
-  docs · settled · 2 turns · tok 5703in/90out, $0.0009 · stop:stop · last 0.8s ago
-  review · settled · 4 turns · tok 12021in/310out, $0.0041 · stop:stop · last 2.1s ago
+  docs [glm-5.3-flash] · settled · 2 turns · tok 5703in/90out, $0.0009 · stop:stop · last 0.8s ago
+  review [glm-4.6] · settled · 4 turns · tok 12021in/310out, $0.0041 · stop:stop · last 2.1s ago
 
 > lanes     wave="survey" action="collect"
   collect wave 'survey':
@@ -139,8 +139,11 @@ While any tracked lane runs, the footer shows one line — e.g. `lanes: 2 runnin
 — updated at the `pollMs` cadence and cleared when nothing is in flight.
 `/lanes` (optionally `/lanes <wave>`) prints the full status table for waves
 seen this session — an untracked wave name is resolved from the default
-workDir — and completes wave names. Both are TUI conveniences over the same
-derived state the `lanes` tool reports.
+workDir — and completes wave names. Each line tags the lane with its model —
+short id (provider prefix dropped), thinking level appended as `think:<level>`
+when set — the actual model from the event stream once answers exist, the pinned
+value before that. Both are TUI conveniences over the same derived state the
+`lanes` tool reports.
 
 ## State model
 

@@ -44,6 +44,12 @@ check(
 		formatLaneLine(st({ state: "running", turns: 2 })).includes("2 turns") &&
 		formatLaneLine(st({ state: "failed", cause: "crashed", errTail: "boom" })).includes("\n    err: boom"),
 );
+check(
+	"lane line: model tag after name, provider prefix dropped, thinking only when present",
+	formatLaneLine(st({ model: "openrouter/zai/glm-4.6", thinkingLevel: "high" })).includes("lane [glm-4.6 think:high] · running") &&
+		formatLaneLine(st({ model: "zai/glm-5.3-flash" })).includes("lane [glm-5.3-flash] · running") &&
+		!formatLaneLine(st({})).includes("["),
+);
 
 console.log(failures === 0 ? "\nall passed" : `\n${failures} FAILED`);
 process.exitCode = failures === 0 ? 0 : 1;
