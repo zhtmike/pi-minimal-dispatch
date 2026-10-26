@@ -1,0 +1,60 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# A new push to a PR branch supersedes its running checks; main runs are never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  # Zero-install by design: plain `node tests/*.ts` on a bare checkout. The 22.19.0
+  # entry is the exact engines floor — the unflagged type-stripping minimum.
+  test:
+    name: test (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["22.19.0", 24]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ matrix.node }}
+      - run: npm test
+
+  # index.ts is the only file importing the pi host API and no test imports it —
+  # this compile gate is the only place host drift shows; toolchain installs ephemerally.
+  typecheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - run: npm install --no-save --no-package-lock --ignore-scripts typescript@7.0.2 @types/node@24 @earendil-works/pi-coding-agent@1.4.0 @earendil-works/pi-ai@1.4.0
+      - run: npx tsc --noEmit
+
+  # Forward canary: same typecheck but pi@latest — surfaces host drift before it
+  # reaches users. Not a hard support guarantee.
+  compat-latest-pi:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - run: npm install --no-save --no-package-lock --ignore-scripts typescript@7.0.2 @types/node@24 @earendil-works/pi-coding-agent@latest @earendil-works/pi-ai@latest
+      - run: npx tsc --noEmit

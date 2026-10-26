@@ -10,7 +10,7 @@ import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { StringEnum, Type } from "@earendil-works/pi-ai";
-import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { defineTool, type AgentToolResult, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { type DispatchConfig, loadConfig } from "./config.ts";
 import {
 	type LaneRecord,
@@ -67,7 +67,7 @@ function spawnLane(workDir: string, wave: string, lane: LaneParams, cfg: Dispatc
 				fs.appendFileSync(record.errPath, `\n[pi-minimal-dispatch] spawn error: ${e.message}\n`);
 			} catch {}
 		});
-		record.pid = child.pid;
+		record.pid = child.pid ?? null;
 		const start = psLstart(child.pid!);
 		if (start === "") {
 			// Without a start-time the liveness guard can never match — stop the lane
@@ -227,7 +227,7 @@ const lanesTool = defineTool({
 		workDir: Type.Optional(Type.String({ description: "Directory holding the manifest (config default: .pi/work)" })),
 	}),
 
-	async execute(_id, params, signal) {
+	async execute(_id, params, signal): Promise<AgentToolResult<{ wave: string }>> {
 		const cfg = loadConfig();
 		const workDir = path.resolve(params.workDir ?? cfg.workDir);
 		const action = params.action ?? "status";

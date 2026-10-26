@@ -1,0 +1,15 @@
+{
+	"compilerOptions": {
+		"target": "es2023",
+		"module": "nodenext",
+		"moduleResolution": "nodenext",
+		"lib": ["es2023"],
+		"types": ["node"],
+		"allowImportingTsExtensions": true,
+		"noEmit": true,
+		"strict": true,
+		"forceConsistentCasingInFileNames": true,
+		"skipLibCheck": true
+	},
+	"include": ["src/**/*.ts", "tests/**/*.ts"]
+}
