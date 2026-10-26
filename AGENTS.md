@@ -15,13 +15,13 @@ three in sync in the same change.
 
 ## Layout
 
-- `src/index.ts` — tool definitions, detached spawning, wait/kill/collect actions, statusbar + `/lanes`
+- `src/index.ts` — tool definitions, detached spawning, wait/kill/collect/release actions, statusbar + `/lanes`
 - `src/config.ts` — configuration: defaults, user/project file merge, validation
 - `src/events.ts` — typed lane event-stream parsing (`pi --mode json` JSONL)
 - `src/derive.ts` — manifest registry, process liveness, state derivation; pure Node builtins, importable without the pi host
 - `src/format.ts` — presentation formatters shared by tool, command, and statusbar
 - `docs/` — `api.md` (tool reference), `design.md` (positioning, mechanics, non-goals)
-- `tests/*.test.ts` — plain `node` scripts, no framework; `tests/prove.sh` — live integration replay (`PI_BIN` override)
+- `tests/*.test.ts` — plain `node` scripts, no framework, covering the pure cores (config, derive, format, lane, release)
 
 ## Working rules
 
@@ -46,7 +46,8 @@ three in sync in the same change.
 node tests/config.test.ts     # must pass; cheap CPU, no model calls
 node tests/derive.test.ts     # must pass
 node tests/format.test.ts     # must pass
-bash tests/prove.sh           # live wave; requires pi >= 1.4.0 and GNU timeout
+node tests/lane.test.ts       # must pass
+node tests/release.test.ts    # must pass
 ```
 
 The pi host API surface used here (`defineTool`, `Type`, `StringEnum`,

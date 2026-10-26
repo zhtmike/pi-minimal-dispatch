@@ -25,7 +25,7 @@
 		"node": ">=22.19.0"
 	},
 	"scripts": {
-		"test": "node tests/config.test.ts && node tests/derive.test.ts && node tests/format.test.ts && node tests/lane.test.ts",
+		"test": "node tests/config.test.ts && node tests/derive.test.ts && node tests/format.test.ts && node tests/lane.test.ts && node tests/release.test.ts",
 		"prepublishOnly": "npm test"
 	},
 	"files": [

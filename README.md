@@ -83,9 +83,12 @@ A real session:
 ```
 
 The ceremony: *write briefs → `dispatch` → `wait` (or poll `status`) →
-`collect` → clean up*. `dispatch` never blocks; waiting is an explicit,
+`collect` → `release`*. `dispatch` never blocks; waiting is an explicit,
 bounded `wait` call that returns the status table the moment every lane
-is `settled`/`failed` — no sleep-then-poll guessing. **Steering** is
+is `settled`/`failed` — no sleep-then-poll guessing. `release` deletes exactly
+the wave's own files and refuses unsettled or foreign-owned waves — a
+hand-sweep of the workDir destroys whatever a sibling session left there.
+**Steering** is
 kill + redispatch: refine the brief, run a new wave (slugs are
 single-use). **Hang detection**: `lastEventAgeSec` is the signal — no
 event growth for ~2× the lane's normal turn latency ⇒ `kill` and
@@ -101,8 +104,8 @@ Two tools — full parameter, output, and configuration reference in
   process group, return in under a second. Per-lane: `model`, `thinking`,
   `deadlineSec`, `tools`, `noExtensions`, `mcp`.
 - **`lanes`** `{wave, action?, waitSec?, workDir?}` — stateless `status` /
-  `wait` / `kill` / `collect` over the wave's manifest; any session can
-  re-adopt a wave, including after the dispatcher exited.
+  `wait` / `kill` / `collect` / `release` over the wave's manifest; any
+  session can re-adopt a wave, including after the dispatcher exited.
 
 **Web/MCP reach**: the default lane is offline. MCP servers connecting
 grants nothing by themselves — a lane reaches their tools only through
@@ -152,8 +155,7 @@ stored: [Mechanics in docs/design.md](docs/design.md#mechanics).
 
 ## Testing
 
-`npm test` runs the unit suites (config, derive, format, lane);
-`bash tests/prove.sh` replays a live wave and bills models.
+`npm test` runs the unit suites (config, derive, format, lane, release).
 
 ## Contributing · License
 

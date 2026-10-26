@@ -13,10 +13,8 @@ for t in tests/*.test.ts; do node "$t"; done   # unit tests — no dependencies,
 pi -e ./src/index.ts                            # load the extension for one session
 ```
 
-Integration proof (`bash tests/prove.sh`) spawns a real pi lane and bills a
-small model call; run it before submitting behavior changes. The extension
-targets macOS and Linux — both GNU `timeout` and `ps -o lstart=` must be
-available.
+The extension targets macOS and Linux — both GNU `timeout` and
+`ps -o lstart=` must be available.
 
 ## CI & releasing
 
@@ -37,8 +35,6 @@ The repo is dependency-free by design: no `node_modules`, no lockfile. CI
 
 Releasing therefore is: bump `version` in `package.json`, add the CHANGELOG
 section, commit, then `git tag vX.Y.Z && git push origin vX.Y.Z`.
-`tests/prove.sh` never runs in CI — it bills models and stays a manual
-pre-release step.
 
 One-time setup (already done or needed once, not per release): on npmjs.com,
 add a trusted publisher for `pi-minimal-dispatch` pointing at this repository

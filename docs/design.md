@@ -55,9 +55,12 @@ one deliberately small surface.
   even when the dispatcher is gone.
 - **Registry**: `<workDir>/<wave>-manifest.json`, created atomically (`wx` —
   slug collisions and concurrent same-wave dispatches fail loudly). Plain
-  JSON on disk: pids, process start-times, deadlines, brief paths — everything
-  a later session needs to re-adopt the wave. The extension never deletes
-  wave artifacts; cleanup stays an explicit step.
+  JSON on disk: pids, process start-times, deadlines, brief paths, and the
+  dispatcher's owner record (session id, pid, host, start-time) — everything
+  a later session needs to re-adopt the wave. Cleanup stays an explicit
+  step — now `release`: it deletes exactly the manifest's enumerated paths
+  plus collect artifacts and the manifest itself, refusing unsettled and
+  foreign-owned waves.
 - **State**: derived on every call from the event stream, PID liveness, and
   the deadline — never stored, never stale. The statusbar and `/lanes` are
   TUI conveniences over this derived state; `--print`/`--mode json` sessions
