@@ -95,7 +95,7 @@ Per-lane `structuredContent` entries. Note: `settled` only means the
 |---|---|---|
 | `name` | string | lane slug |
 | `state` | string | `starting` \| `running` \| `settled` \| `failed` |
-| `cause` | string? | for `failed`: `spawn` · `killed` · `deadline` · `crashed` |
+| `cause` | string? | for `failed`: `spawn` · `killed` · `deadline` · `crashed` (a death after the deadline is `deadline` even when the process crashed) |
 | `overdue` | boolean? | alive past its deadline (leash misfire) — informational |
 | `turns` | number | turn count so far |
 | `usage` | object | run totals summed over assistant messages: `{input, output, cacheRead, cacheWrite, cost}` |
