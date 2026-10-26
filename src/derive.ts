@@ -7,7 +7,7 @@
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { type LaneEvent, type StreamMessage, assistantMessageEnd, messageText, parseEvents } from "./events.ts";
+import { type LaneEvent, type StreamMessage, assistantMessageEnd, assistantMessageStart, messageText, parseEvents } from "./events.ts";
 
 export type LaneRecord = {
 	name: string;
@@ -137,6 +137,12 @@ export function deriveLane(lane: LaneRecord, now: number): LaneStatus {
 	const events = parseEvents(lane.eventsPath);
 	for (const e of events) {
 		if (e.type === "turn_start") base.turns++;
+		// message_start reveals the answering model at generation start; it carries no
+		// thinkingLevel — message_end stays the sole level authority.
+		const starting = assistantMessageStart(e);
+		if (starting !== null && typeof starting.model === "string") {
+			base.model = starting.model;
+		}
 		const message = assistantMessageEnd(e);
 		if (message !== null) {
 			const u = message.usage ?? {};

@@ -50,6 +50,8 @@ const session = JSON.stringify({ type: "session", id: "s" });
 const turn = JSON.stringify({ type: "turn_start" });
 const assistantEnd = (usage: object, stopReason: string, extra: object = {}) =>
 	JSON.stringify({ type: "message_end", message: { role: "assistant", stopReason, usage, content: [], ...extra } });
+const assistantStart = (extra: object = {}) =>
+	JSON.stringify({ type: "message_start", message: { role: "assistant", stopReason: "pending", usage: {}, content: [], ...extra } });
 
 // --- parseEvents -----------------------------------------------------------
 
@@ -147,6 +149,44 @@ check(
 	JSON.stringify(s),
 );
 
+// message_start: early model identity before the first message_end
+writeEvents([session, turn, assistantStart({ model: "zai/glm-5.3" }), '{"type":"message_update","message":{"role":"assistant"}}']);
+s = deriveLane(lane({ pid: process.pid, processStart: psLstart(process.pid) }), Date.now());
+check(
+	"message_start supplies the answering model before any message_end (no-pin lane)",
+	s.model === "zai/glm-5.3" && s.usage.input === 0,
+	JSON.stringify(s.model),
+);
+
+writeEvents([session, turn,
+	assistantStart({ model: "zai/glm-4.6" }),
+	assistantEnd({ input: 1 }, "toolUse", { model: "zai/glm-4.6", thinkingLevel: "high" }),
+	assistantStart({ model: "zai/glm-5.3-flash" }),
+]);
+s = deriveLane(lane({ pid: process.pid, processStart: psLstart(process.pid) }), Date.now());
+check(
+	"message_start after a model switch updates the model; the stale level waits for message_end (additive)",
+	s.model === "zai/glm-5.3-flash" && s.thinkingLevel === "high",
+	JSON.stringify({ model: s.model, thinkingLevel: s.thinkingLevel }),
+);
+
+writeEvents([session, turn, assistantStart({ model: "zai/glm-5.3-flash" })]);
+s = deriveLane(lane({ pid: process.pid, processStart: psLstart(process.pid), model: "zai/glm-5.3-flash:low" }), Date.now());
+check(
+	"message_start additive: a matching model keeps the pinned level until message_end",
+	s.model === "zai/glm-5.3-flash" && s.thinkingLevel === "low",
+	JSON.stringify({ model: s.model, thinkingLevel: s.thinkingLevel }),
+);
+
+writeEvents([session, turn, assistantStart({ model: "glm-5.3-flash" })]);
+s = deriveLane(lane({ pid: process.pid, processStart: psLstart(process.pid), model: "zai/glm-5.3-flash:low" }), Date.now());
+check(
+	"message_start additive across forms: bare stream id over a provider-qualified pin keeps the pinned level",
+	s.model === "glm-5.3-flash" && s.thinkingLevel === "low",
+	JSON.stringify({ model: s.model, thinkingLevel: s.thinkingLevel }),
+);
+
+writeEvents([session]);
 s = deriveLane(lane({ pid: deadPid, model: "zai/glm-4.6" }), Date.now());
 check(
 	"model fallback: plain pinned id passes through; unpinned stays undefined",

@@ -9,8 +9,10 @@ import type { LaneStatus } from "./derive.ts";
 export function formatLaneLine(s: LaneStatus): string {
 	// Short form: provider prefix dropped, thinking level labeled `think:` (a bare level word
 	// reads like a model variant) — the full ids live in the structured status payload.
-	const id = s.model ? s.model.split("/").pop() : undefined;
-	const tag = id === undefined ? "" : ` [${id}${s.thinkingLevel !== undefined ? ` think:${s.thinkingLevel}` : ""}]`;
+	// No model yet (pre-generation, no pins): [default] — omitted pins inherit pi's
+	// configured default; an absent tag reads as "no model / broken".
+	const id = s.model ? s.model.split("/").pop() : "default";
+	const tag = ` [${id}${s.thinkingLevel !== undefined ? ` think:${s.thinkingLevel}` : ""}]`;
 	const bits = [`${s.name}${tag}`, s.state];
 	if (s.cause) bits.push(`(${s.cause}${s.spawnError ? `: ${s.spawnError}` : ""})`);
 	if (s.overdue) bits.push("OVERDUE");
