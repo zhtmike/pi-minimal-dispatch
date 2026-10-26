@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- Status tags never go silent: an assistant `message_start` reveals the
+  answering model the moment generation begins (pi builds the message with
+  the model id at start), so a lane that pins no model shows its identity
+  before the first answer; and a lane still pre-generation that pins neither
+  `model` nor `thinking` renders `[default]` instead of no tag — omitted pins
+  inherit pi's configured default, which is worth saying out loud rather
+  than reading as "no model / broken". `message_start` is additive: it
+  carries no thinking level, so a pinned level stands until the first
+  `message_end` confirms or replaces it.
+
 ## 0.3.0 — 2026-10-26
 
 - `dispatch` lanes accept `thinking` — pin a lane's thinking level

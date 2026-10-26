@@ -211,7 +211,7 @@ const lanesTool = defineTool({
 	description:
 		"Observe/control a dispatched wave. action=status (default): per-lane derived state " +
 		"(starting/running/settled/failed + cause spawn|killed|deadline|crashed), turns, run-total usage, " +
-		"model + thinking level (actual, from the last assistant message; pinned value before the first), " +
+		"model + thinking level (actual, from the event stream — message_start's model once generation begins, last assistant message once it answers; pinned value before that; [default] in status lines for a pre-generation lane that pins nothing), " +
 		"stopReason, last-event age, .err tail for crashed lanes. action=wait: hold this call open, " +
 		"re-deriving at the pollMs cadence, until every lane is settled/failed or waitSec (default 300, " +
 		"max 3600) elapses — then return the status table; replaces blind sleep-then-status polling. " +

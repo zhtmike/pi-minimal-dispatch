@@ -141,9 +141,11 @@ While any tracked lane runs, the footer shows one line — e.g. `lanes: 2 runnin
 seen this session — an untracked wave name is resolved from the default
 workDir — and completes wave names. Each line tags the lane with its model —
 short id (provider prefix dropped), thinking level appended as `think:<level>`
-when set — the actual model from the event stream once answers exist, the pinned
-value before that. Both are TUI conveniences over the same derived state the
-`lanes` tool reports.
+when set — the actual model from the event stream once generation begins
+(assistant `message_start`), the pinned value before that, and `[default]`
+for a lane that pins nothing and hasn't started generating (omitted pins
+inherit pi's configured default). Both are TUI conveniences over the same
+derived state the `lanes` tool reports.
 
 ## State model
 

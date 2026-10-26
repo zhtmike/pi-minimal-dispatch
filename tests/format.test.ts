@@ -38,7 +38,7 @@ check(
 );
 check(
 	"lane line: cause, overdue, singular turns, err tail indentation",
-	formatLaneLine(st({ state: "failed", cause: "crashed", errTail: "boom\nsecond" })).includes("lane · failed · (crashed)") &&
+	formatLaneLine(st({ state: "failed", cause: "crashed", errTail: "boom\nsecond" })).includes("lane [default] · failed · (crashed)") &&
 		formatLaneLine(st({ state: "running", overdue: true })).includes("OVERDUE") &&
 		formatLaneLine(st({ state: "running" })).includes("1 turn") &&
 		formatLaneLine(st({ state: "running", turns: 2 })).includes("2 turns") &&
@@ -47,8 +47,11 @@ check(
 check(
 	"lane line: model tag after name, provider prefix dropped, thinking only when present",
 	formatLaneLine(st({ model: "openrouter/zai/glm-4.6", thinkingLevel: "high" })).includes("lane [glm-4.6 think:high] · running") &&
-		formatLaneLine(st({ model: "zai/glm-5.3-flash" })).includes("lane [glm-5.3-flash] · running") &&
-		!formatLaneLine(st({})).includes("["),
+		formatLaneLine(st({ model: "zai/glm-5.3-flash" })).includes("lane [glm-5.3-flash] · running"),
+);
+check(
+	"lane line: no model yet renders [default] — never an absent tag",
+	formatLaneLine(st({})).includes("lane [default] · running"),
 );
 
 console.log(failures === 0 ? "\nall passed" : `\n${failures} FAILED`);

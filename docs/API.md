@@ -99,8 +99,8 @@ Per-lane `structuredContent` entries. Note: `settled` only means the
 | `overdue` | boolean? | alive past its deadline (leash misfire) — informational |
 | `turns` | number | turn count so far |
 | `usage` | object | run totals summed over assistant messages: `{input, output, cacheRead, cacheWrite, cost}` |
-| `model` | string? | model answering the last assistant message; until the first assistant message, the pinned model with pi's `:thinking` suffix split off (last colon, valid level word only) |
-| `thinkingLevel` | string? | thinking level of the last assistant message (`off`–`max`); until the first assistant message, the pinned level — explicit `thinking` over the model's `:level` suffix |
+| `model` | string? | model answering the last assistant message; earlier, the model from the lane's assistant `message_start` (pi sets it when generation begins); before that, the pinned model with pi's `:thinking` suffix split off (last colon, valid level word only). `undefined` only pre-generation on a lane that pins no model |
+| `thinkingLevel` | string? | thinking level of the last assistant message (`off`–`max`); until the first message_end, the pinned level — explicit `thinking` over the model's `:level` suffix (`message_start` carries no level, so a pinned one stays) |
 | `stopReason` | string? | last assistant stop reason (`stop` is clean) |
 | `lastEventAgeSec` | number? | seconds since the events file last grew — the stuck-lane signal |
 | `spawnError` | string? | why a `spawn`-failed lane never started |

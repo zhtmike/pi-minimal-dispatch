@@ -56,6 +56,18 @@ export function assistantMessageEnd(e: LaneEvent): StreamMessage | null {
 	return message;
 }
 
+/**
+ * Narrow an event to an assistant `message_start`, else null. pi's message_start
+ * carries the initial message with `model` already set (proxy.ts builds the partial
+ * with the answering model's id) but no `thinkingLevel` — that lands at message_end.
+ */
+export function assistantMessageStart(e: LaneEvent): StreamMessage | null {
+	if (e.type !== "message_start") return null;
+	const message = (e as { message?: StreamMessage }).message;
+	if (message === undefined || message.role !== "assistant") return null;
+	return message;
+}
+
 /** Concatenated text blocks of an assistant message; empty when it has none. */
 export function messageText(message: StreamMessage): string {
 	const blocks = Array.isArray(message.content) ? message.content : [];
