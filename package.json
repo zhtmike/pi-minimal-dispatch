@@ -1,6 +1,6 @@
 {
 	"name": "pi-minimal-dispatch",
-	"version": "0.2.1",
+	"version": "0.3.0",
 	"description": "Minimal detached lane dispatch with visible state for the pi coding agent — dispatch/lanes tools over a manifest + JSON-event protocol",
 	"author": "Mike Cheung",
 	"keywords": [
