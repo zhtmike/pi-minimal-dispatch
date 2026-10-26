@@ -7,7 +7,7 @@ Guidance for AI agents working in this repository.
 `pi-minimal-dispatch` is a [pi](https://pi.dev) extension (pi ≥ 1.4.0) with a
 deliberately small surface: two tools (`dispatch`, `lanes`), one manifest
 format, one derivation core. Read [README.md](README.md) first, then
-[docs/API.md](docs/API.md) — together they are the user-facing contract.
+[docs/api.md](docs/api.md) — together they are the user-facing contract.
 When code and docs disagree, that is a bug in one of
 them; fix the disagreement, not just the code. The tool schemas in
 `src/index.ts` are the model-facing half of the same contract — keep the
@@ -20,6 +20,7 @@ three in sync in the same change.
 - `src/events.ts` — typed lane event-stream parsing (`pi --mode json` JSONL)
 - `src/derive.ts` — manifest registry, process liveness, state derivation; pure Node builtins, importable without the pi host
 - `src/format.ts` — presentation formatters shared by tool, command, and statusbar
+- `docs/` — `api.md` (tool reference), `design.md` (positioning, mechanics, non-goals)
 - `tests/*.test.ts` — plain `node` scripts, no framework; `tests/prove.sh` — live integration replay (`PI_BIN` override)
 
 ## Working rules
