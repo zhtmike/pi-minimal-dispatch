@@ -1,6 +1,6 @@
 {
 	"name": "pi-minimal-dispatch",
-	"version": "0.3.1",
+	"version": "0.3.2",
 	"description": "Minimal detached lane dispatch with visible state for the pi coding agent — no personas, no queue, no server; briefs in, artifacts out; zero runtime dependencies",
 	"author": "Mike Cheung",
 	"keywords": [
@@ -25,7 +25,7 @@
 		"node": ">=22.19.0"
 	},
 	"scripts": {
-		"test": "node tests/config.test.ts && node tests/derive.test.ts && node tests/format.test.ts && node tests/lane.test.ts",
+		"test": "node tests/config.test.ts && node tests/derive.test.ts && node tests/format.test.ts && node tests/lane.test.ts && node tests/release.test.ts",
 		"prepublishOnly": "npm test"
 	},
 	"files": [

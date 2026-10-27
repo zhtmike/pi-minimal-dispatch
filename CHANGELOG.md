@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.2 — 2026-10-27
+
+- Wave cleanup became a tool boundary: the manifest records the dispatcher's
+  owner identity (session id, pid, host, `ps` start-time, captured before the
+  slug claim), and on that record `kill` refuses a wave owned by a live
+  foreign session while the new `lanes action=release` replaces hand-deletion
+  — it deletes exactly the wave's manifest-enumerated files plus its collect
+  artifacts and the manifest, refusing unsettled, foreign-owned, and
+  unattributable waves (pre-owner manifests fail closed; every refusal names
+  the human override). Concurrent sessions sharing a workDir no longer risk
+  each other's state through `rm` and prefix globs.
+- `dispatch` fails a lane early whose brief carries a fenced
+  `bash`/`sh`/`shell`/`zsh` block while its `tools` grants no `bash` — the
+  mismatch used to surface only mid-run, after the dispatcher stopped
+  looking. Quoted output in a `text` fence never demands `bash`.
+- `tests/prove.sh` is gone: a live run bills models, and nothing scripted
+  replaces it.
+
 ## 0.3.1 — 2026-10-26
 
 - Status tags never go silent: an assistant `message_start` reveals the

@@ -7,7 +7,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { DEFAULT_LANE_TOOLS, assertLaneTools, assertSlugs, buildLaneArgs, laneEnv, missingBriefs, resolveExecutable, selectKillTargets, toolEntries } from "../src/lane.ts";
+import { DEFAULT_LANE_TOOLS, assertBriefTools, assertLaneTools, assertSlugs, buildLaneArgs, laneEnv, missingBriefs, resolveExecutable, selectKillTargets, toolEntries } from "../src/lane.ts";
 import type { LaneParams } from "../src/lane.ts";
 import type { LaneRecord } from "../src/derive.ts";
 
@@ -188,6 +188,57 @@ function pidAliveFake(l: LaneRecord): boolean {
 	return l.processStart === "s" && l.pid !== null;
 }
 check("kill targets: only spawned, start-matching, unsettled lanes", targets.length === 1 && targets[0].name === "killme");
+
+// --- assertBriefTools ------------------------------------------------------
+
+const bashBrief = path.join(tmp, "bash-brief.md");
+fs.writeFileSync(bashBrief, "Run the checks:\n\n```bash\nnpm test\n```\n");
+const textBrief = path.join(tmp, "text-brief.md");
+fs.writeFileSync(textBrief, "Observed output:\n\n```text\n$ npm test\nall passed\n```\n");
+const shBrief = path.join(tmp, "sh-brief.md");
+fs.writeFileSync(shBrief, "```sh\nps -o lstart= -p 1\n```\n");
+
+function BL(over: Partial<LaneParams>): LaneParams {
+	return { name: "bl", briefPath: bashBrief, mcp: false, ...over };
+}
+check(
+	"brief tools: fenced bash block without bash in tools is rejected",
+	throwsWith(() => assertBriefTools([BL({})]), "grants no 'bash'"),
+);
+check(
+	"brief tools: default tools (no bash) rejected on a fenced block too",
+	throwsWith(() => assertBriefTools([{ name: "bl", briefPath: bashBrief }]), "read,grep,find,ls"),
+);
+check(
+	"brief tools: bash granted passes the fenced block",
+assertBriefTools([BL({ tools: "read,grep,find,ls,bash" })]) === undefined,
+);
+check(
+	"brief tools: text-fenced output never demands bash",
+assertBriefTools([{ name: "bl", briefPath: textBrief, mcp: false }]) === undefined,
+);
+check(
+	"brief tools: sh fence rejected like bash",
+	throwsWith(() => assertBriefTools([{ name: "bl", briefPath: shBrief, mcp: false }]), "fenced bash/shell"),
+);
+check(
+	"brief tools: every offending lane is listed",
+	throwsWith(() => assertBriefTools([BL({}), BL({ name: "bl2" })]), "lane 'bl2'"),
+);
+const inlineBrief = path.join(tmp, "inline-brief.md");
+fs.writeFileSync(inlineBrief, "Judge, never run: the payload says `git worktree add -b` and `ps -o lstart= -p 1`.\n");
+const infoBrief = path.join(tmp, "info-brief.md");
+fs.writeFileSync(infoBrief, "```bash title=example\ngit status\n```\n");
+const prefixBrief = path.join(tmp, "prefix-brief.md");
+fs.writeFileSync(prefixBrief, "```bashscript\nnot a shell fence\n```\n");
+check(
+	"brief tools: inline backticks, info-string fences, and prefix lookalikes never demand bash",
+	assertBriefTools([{ name: "i", briefPath: inlineBrief, mcp: false }, { name: "n", briefPath: infoBrief, mcp: false }, { name: "p", briefPath: prefixBrief, mcp: false }]) === undefined,
+);
+check(
+	"brief tools: a wildcard tools entry granting bash passes a fenced block",
+	assertBriefTools([BL({ tools: "read,*" })]) === undefined,
+);
 
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(failures === 0 ? "\nall passed" : `\n${failures} FAILED`);

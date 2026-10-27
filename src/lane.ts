@@ -78,6 +78,14 @@ export function toolEntries(lane: LaneParams): string[] {
 		.filter((e) => e !== "");
 }
 
+/** A fenced bash/shell block in a brief is an instruction to run — bash must be granted. */
+const BRIEF_SHELL_FENCE = /^```(bash|sh|shell|zsh)\s*$/m;
+
+/** Whether the brief file carries a fenced shell block (a runnable command, not quoted output). */
+export function briefDemandsBash(briefPath: string): boolean {
+	return BRIEF_SHELL_FENCE.test(fs.readFileSync(briefPath, "utf8"));
+}
+
 /** Whether a `--tools` entry matches a tool name — exact, or a `*` pattern anchored both ends (pi's matcher). */
 function entryMatches(entry: string, name: string): boolean {
 	if (!entry.includes("*")) return entry === name;
@@ -123,6 +131,27 @@ export function assertLaneTools(lanes: LaneParams[]): void {
 				`lane '${lane.name}': MCP left enabled but tools '${lane.tools ?? DEFAULT_LANE_TOOLS}' grants no route to MCP tools — ` +
 					"name 'codemode' or 'tool_search' (an 'mcp__server__*' entry alone reaches only direct-exposure servers; pair it with codemode), " +
 					"or set mcp:false — entries reach pi verbatim, no shell quoting",
+			);
+		}
+	}
+	if (problems.length > 0) throw new Error(problems.join("\n"));
+}
+
+/**
+ * Reject lanes whose brief carries a fenced shell block while `bash` is not in
+ * their tools: the lane would only discover the missing tool mid-run, after the
+ * dispatcher stopped looking. Validate before the manifest claim.
+ */
+export function assertBriefTools(lanes: LaneParams[], cwd: string = process.cwd()): void {
+	const problems: string[] = [];
+	for (const lane of lanes) {
+		// `*` patterns count — pi's matcher, not a literal scan, decides what a lane can run.
+		if (toolEntries(lane).some((e) => entryMatches(e, "bash"))) continue;
+		const briefPath = path.resolve(cwd, lane.briefPath);
+		if (briefDemandsBash(briefPath)) {
+			problems.push(
+				`lane '${lane.name}': brief carries a fenced bash/shell block but tools '${lane.tools ?? DEFAULT_LANE_TOOLS}' grants no 'bash' — ` +
+					"grant bash in tools or unfence the block (quoted output belongs in a text fence)",
 			);
 		}
 	}

@@ -8,6 +8,7 @@
 
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
+import { hostname } from "node:os";
 import * as path from "node:path";
 import { StringEnum, Type } from "@earendil-works/pi-ai";
 import { defineTool, type AgentToolResult, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -16,18 +17,22 @@ import {
 	type LaneRecord,
 	type LaneStatus,
 	type Manifest,
+	currentOwner,
 	deriveLane,
 	finalAssistantText,
 	manifestPathFor,
+	ownerGuard,
 	parseEvents,
 	pidAlive,
 	psLstart,
 	readManifest,
+	releaseWave,
 	waitForTerminal,
+	waveTerminal,
 	writeManifestAtomic,
 } from "./derive.ts";
 import { formatStatusBarSummary, formatWaveStatus } from "./format.ts";
-import { type LaneParams, assertLaneTools, assertSlugs, buildLaneArgs, laneEnv, missingBriefs, resolveExecutable, selectKillTargets } from "./lane.ts";
+import { type LaneParams, assertBriefTools, assertLaneTools, assertSlugs, buildLaneArgs, laneEnv, missingBriefs, resolveExecutable, selectKillTargets } from "./lane.ts";
 
 /** Spawn one lane detached; a failure at any step becomes the record's spawnError, never a throw. */
 function spawnLane(workDir: string, wave: string, lane: LaneParams, cfg: DispatchConfig, timeoutBin: string): LaneRecord {
@@ -102,7 +107,7 @@ const dispatchTool = defineTool({
 		"a read-only tool default, MCP reach only via a route named in tools (else set mcp: false), " +
 		"and never the dispatch tool itself. Every lane in the call is " +
 		"spawned — the caller bounds the wave. " +
-		"Then poll with the lanes tool; collect artifacts when settled.",
+		"Then poll with the lanes tool; collect artifacts when settled, release the wave when done.",
 	parameters: Type.Object({
 		wave: Type.String({ description: "Wave slug (kebab-case, max 64 chars); must not already exist in workDir" }),
 		lanes: Type.Array(
@@ -121,10 +126,13 @@ const dispatchTool = defineTool({
 		workDir: Type.Optional(Type.String({ description: "Directory for briefs/events/manifest (config default: .pi/work)" })),
 	}),
 
-	async execute(_id, params) {
+	async execute(_id, params, _signal, _onUpdate, ctx) {
 		const cfg = loadConfig();
 		const workDir = path.resolve(params.workDir ?? cfg.workDir);
 		fs.mkdirSync(workDir, { recursive: true });
+		// Owner identity is captured before anything validates: a blind ps would make
+		// every later release/kill guard fail closed forever.
+		const owner = currentOwner(ctx.sessionManager.getSessionId());
 		// Slugs are validated before the manifest claim: a post-claim throw would strand the slug.
 		assertSlugs(params.wave, params.lanes.map((l) => l.name));
 
@@ -136,6 +144,8 @@ const dispatchTool = defineTool({
 
 		// Tool contracts are validated before the manifest claim: a post-claim throw would strand the slug.
 		assertLaneTools(params.lanes);
+		// A brief that demands a shell the lane lacks fails here, not mid-run after spawn.
+		assertBriefTools(params.lanes);
 
 		// Claim the wave slug atomically; an existing manifest rejects it.
 		const manifestPath = manifestPathFor(workDir, params.wave);
@@ -162,6 +172,7 @@ const dispatchTool = defineTool({
 			wave: params.wave,
 			workDir,
 			createdAt: new Date().toISOString(),
+			owner,
 			lanes: [],
 		};
 		for (const lane of params.lanes) {
@@ -216,20 +227,23 @@ const lanesTool = defineTool({
 		"re-deriving at the pollMs cadence, until every lane is settled/failed or waitSec (default 300, " +
 		"max 3600) elapses — then return the status table; replaces blind sleep-then-status polling. " +
 		"action=kill: SIGTERM the lane process group " +
-		"(SIGKILL after the configured grace), start-time guarded. action=collect: write each finished lane's final assistant " +
+		"(SIGKILL after the configured grace), start-time guarded; refuses waves owned by a live foreign session. " +
+		"action=collect: write each finished lane's final assistant " +
 		"message to <wave>-<name>.md (suspect-flagged on failure/empty/non-clean stopReason); a refusal " +
 		"(running / never spawned) is a successful result with a per-lane reason. Stateless: reads the manifest " +
 		"fresh — works across sessions, including after the dispatcher exited. A collected lane is a path plus " +
 		"`suspect`; `suspect: true` means the artifact is not done — read the file only to judge it, do not paste " +
-		"it back. Discover waves: ls <workDir>/*-manifest.json.",
+		"it back. action=release: delete exactly a settled wave's own files — the manifest-enumerated " +
+		"briefs/events/err, collect artifacts, and the manifest; refuses unsettled and foreign-owned waves. " +
+		"Discover waves: ls <workDir>/*-manifest.json.",
 	parameters: Type.Object({
 		wave: Type.String({ description: "Wave slug" }),
-		action: Type.Optional(StringEnum(["status", "wait", "kill", "collect"])),
+		action: Type.Optional(StringEnum(["status", "wait", "kill", "collect", "release"])),
 		waitSec: Type.Optional(Type.Number({ description: "wait action only: max seconds to hold the call open (default 300; 1–3600)", minimum: 1, maximum: 3600 })),
 		workDir: Type.Optional(Type.String({ description: "Directory holding the manifest (config default: .pi/work)" })),
 	}),
 
-	async execute(_id, params, signal): Promise<AgentToolResult<{ wave: string }>> {
+	async execute(_id, params, signal, _onUpdate, ctx): Promise<AgentToolResult<{ wave: string }>> {
 		const cfg = loadConfig();
 		const workDir = path.resolve(params.workDir ?? cfg.workDir);
 		const action = params.action ?? "status";
@@ -257,6 +271,8 @@ const lanesTool = defineTool({
 		}
 
 		if (action === "kill") {
+			const guard = ownerGuard(manifest.owner, ctx.sessionManager.getSessionId(), hostname(), params.wave);
+			if (!guard.ok) throw new Error(guard.reason);
 			const killed: string[] = [];
 			try {
 				const targets = selectKillTargets(
@@ -308,6 +324,26 @@ const lanesTool = defineTool({
 					},
 				],
 				structuredContent: { wave: params.wave, killed, lanes: statuses },
+				details: { wave: params.wave },
+			};
+		}
+
+		if (action === "release") {
+			const guard = ownerGuard(manifest.owner, ctx.sessionManager.getSessionId(), hostname(), params.wave);
+			if (!guard.ok) throw new Error(guard.reason);
+			if (!waveTerminal(manifest.lanes, Date.now())) {
+				throw new Error(`wave '${params.wave}' is not settled — wait or kill first`);
+			}
+			const { deleted, absent } = releaseWave(manifest);
+			tracked.delete(params.wave); // the wave is gone; do not wait for the next statusbar tick
+			return {
+				content: [
+					{
+						type: "text",
+						text: `released wave '${params.wave}': ${deleted.length} file(s) deleted, ${absent} already absent`,
+					},
+				],
+				structuredContent: { wave: params.wave, deleted, absent },
 				details: { wave: params.wave },
 			};
 		}

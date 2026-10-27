@@ -29,14 +29,18 @@ the leash. Events stream to `<workDir>/<wave>-<name>.events.jsonl`.
 | `workDir` | string? | `workDir` config (`.pi/work`) | Directory for manifest, events, and artifacts |
 
 **Result:** text summary plus `structuredContent` — `{ wave, manifestPath, lanes[] }`
-with each lane's pid, paths, and deadline. Spawned lanes stream events
+with each lane's pid, paths, and deadline. The manifest also records the
+dispatcher's `owner` — `{ sid, pid, host, lstart }` — which the `kill` and
+`release` actions use as their ownership guard. Spawned lanes stream events
 immediately; a lane that failed to spawn appears as `SPAWN ERROR: …`.
 
 **Errors** (the whole call fails, zero lanes spawned, no slug claimed):
 a brief file missing (all missing paths listed) · malformed or duplicate slugs ·
 `tools` that is not a plain allowlist (`+name`/`-name` modifiers, shell quoting,
 or an empty list) · a lane leaving MCP enabled while its `tools` names neither
-`codemode` nor `tool_search` · wave slug already exists · `timeoutBin`/`piBin`
+`codemode` nor `tool_search` · a brief carrying a fenced `bash`/`sh`/`shell`/`zsh`
+block while its lane's `tools` grants no `bash` (grant `bash` or unfence — quoted
+output belongs in a `text` fence) · wave slug already exists · `timeoutBin`/`piBin`
 not found on `PATH`.
 
 ### MCP and web reach
@@ -81,7 +85,7 @@ fresh one after the dispatcher exited — sees the same truth.
 | Parameter | Type | Default | Description |
 |---|---|---|---|
 | `wave` | string | — | Wave slug |
-| `action` | string? | `"status"` | `"status"` \| `"wait"` \| `"kill"` \| `"collect"` |
+| `action` | string? | `"status"` | `"status"` \| `"wait"` \| `"kill"` \| `"collect"` \| `"release"` |
 | `waitSec` | number? | `300` | `wait` only: max seconds to hold the call open (1–3600) |
 | `workDir` | string? | `workDir` config (`.pi/work`) | Directory holding the manifest |
 
@@ -124,6 +128,9 @@ SIGTERM to each eligible lane's process group (never a
 start-time-mismatched/reused PID; settled lanes skipped), SIGKILL after the
 `killGraceMs` config grace, then a manifest tombstone so the kill survives
 re-adoption. Idempotent; honors tool-call cancellation during the grace wait.
+Waves owned by a **live foreign session** are refused (see `release` for the
+owner rules); killing your own wave or a provably-dead owner's runaway leash
+is unaffected.
 
 ### `collect`
 
@@ -134,6 +141,27 @@ failed, the message is empty, or the stop reason was not clean — treat such an
 artifact as **not done** and read the file only to judge it, don't paste it
 back into the conversation. A refused lane (still running / never spawned) is
 a **successful** tool result carrying a per-lane `reason`, not an error.
+
+### `release`
+
+Cleanup as a tool boundary: deletes exactly the wave's manifest-enumerated
+files (brief, events, `.err`), its collect artifacts (`<wave>-<name>.md`),
+and the manifest itself — nothing else, no globs. Files already deleted
+among the enumerated set are tolerated (idempotent). Result:
+`{ wave, deleted[], absent }`.
+
+Refused (a thrown error, wave retained) when:
+
+- the wave is not settled/failed yet — `wait` or `kill` first;
+- the manifest's `owner` names a **live foreign session** (same host, pid
+  alive with matching start-time) — only the dispatching session, or any
+  session once the owner is provably dead, may release;
+- the owner is on a **different host** — neither live nor provably dead
+  from this host;
+- the owner record is missing or malformed (pre-owner manifests) — fail
+  closed, never guessed.
+
+The refusals bind sessions, not people: a human may always delete by hand.
 
 ## Configuration
 

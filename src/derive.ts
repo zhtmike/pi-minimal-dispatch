@@ -6,6 +6,7 @@
 
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
+import { hostname } from "node:os";
 import * as path from "node:path";
 import { type LaneEvent, type StreamMessage, assistantMessageEnd, assistantMessageStart, messageText, parseEvents } from "./events.ts";
 
@@ -32,7 +33,17 @@ export type Manifest = {
 	wave: string;
 	workDir: string;
 	createdAt: string;
+	/** Dispatcher identity, stamped at claim time — the release/kill ownership guard. */
+	owner?: WaveOwner;
 	lanes: LaneRecord[];
+};
+
+/** Dispatcher identity recorded at dispatch; `lstart` is `ps -o lstart=` captured then. */
+export type WaveOwner = {
+	sid: string;
+	pid: number;
+	host: string;
+	lstart: string;
 };
 
 export type LaneFailureCause = "spawn" | "killed" | "deadline" | "crashed";
@@ -103,6 +114,92 @@ export function pidAlive(pid: number, expectedStart: string | null): boolean {
 	if (expectedStart === null) return reachable;
 	const actual = psLstart(pid);
 	return actual !== "" && actual === expectedStart;
+}
+
+// --- wave ownership --------------------------------------------------------
+
+export type OwnerStatus = "own" | "live-foreign" | "foreign-host" | "dead" | "unknown";
+
+/** Owner record for the current dispatcher; throws when ps cannot capture the start-time. */
+export function currentOwner(sid: string): WaveOwner {
+	const lstart = psLstart(process.pid);
+	if (lstart === "") {
+		throw new Error("could not capture the dispatcher's process start-time (ps failed) — ownership guards would be blind");
+	}
+	return { sid, pid: process.pid, host: hostname(), lstart };
+}
+
+/**
+ * Classify a manifest's owner against the calling session. `unknown` is any
+ * absent or malformed record — fail-closed, never treated as dead.
+ */
+export function ownerStatus(owner: WaveOwner | undefined, selfSid: string, currentHost: string): OwnerStatus {
+	if (
+		owner == null || // null is a hand-edited manifest — same fail-closed path as absent
+		typeof owner.sid !== "string" ||
+		owner.sid === "" ||
+		!Number.isInteger(owner.pid) ||
+		owner.pid <= 0 ||
+		typeof owner.host !== "string" ||
+		owner.host === "" ||
+		typeof owner.lstart !== "string" ||
+		owner.lstart === ""
+	) {
+		return "unknown";
+	}
+	if (owner.sid === selfSid) return "own";
+	if (owner.host !== currentHost) return "foreign-host";
+	return pidAlive(owner.pid, owner.lstart) ? "live-foreign" : "dead";
+}
+
+export type OwnerGuard =
+	| { ok: true; owner: "own" | "dead" }
+	| { ok: false; owner: OwnerStatus; reason: string };
+
+/**
+ * Ownership gate for the destructive actions (kill, release). A foreign-host
+ * owner is neither live nor provably dead — retained; the refusals bind
+ * sessions, not people — a human may always intervene by hand.
+ */
+export function ownerGuard(owner: WaveOwner | undefined, selfSid: string, currentHost: string, wave: string): OwnerGuard {
+	const status = ownerStatus(owner, selfSid, currentHost);
+	switch (status) {
+		case "own":
+		case "dead": // provable same-host death — the wave is adoptable
+			return { ok: true, owner: status };
+		case "live-foreign":
+			return { ok: false, owner: status, reason: `wave '${wave}' is owned by a live session (sid ${owner!.sid}, pid ${owner!.pid}) — refused; a human may intervene by hand` };
+		case "foreign-host":
+			return { ok: false, owner: status, reason: `wave '${wave}' is owned by a session on host '${owner!.host}' — neither live nor provably dead from this host; retained — a human may clean up by hand` };
+		default:
+			return { ok: false, owner: status, reason: `wave '${wave}' has no usable owner record (pre-owner manifest or malformed) — retained; a human may clean up by hand` };
+	}
+}
+
+/** Every file a release may delete: manifest-enumerated paths, collect artifacts, the manifest. */
+export function releasePaths(m: Manifest): string[] {
+	const paths: string[] = [];
+	for (const lane of m.lanes) {
+		paths.push(lane.briefPath, lane.eventsPath, lane.errPath, path.join(m.workDir, `${m.wave}-${lane.name}.md`));
+	}
+	paths.push(manifestPathFor(m.workDir, m.wave));
+	return paths;
+}
+
+/** Delete exactly `releasePaths(m)`, tolerating already-deleted files. The decision is the caller's. */
+export function releaseWave(m: Manifest): { deleted: string[]; absent: number } {
+	const deleted: string[] = [];
+	let absent = 0;
+	for (const p of releasePaths(m)) {
+		try {
+			fs.unlinkSync(p);
+			deleted.push(p);
+		} catch (e: any) {
+			if (e.code === "ENOENT") absent++;
+			else throw e;
+		}
+	}
+	return { deleted, absent };
 }
 
 // --- state derivation ------------------------------------------------------
