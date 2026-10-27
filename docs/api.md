@@ -38,7 +38,9 @@ immediately; a lane that failed to spawn appears as `SPAWN ERROR: …`.
 a brief file missing (all missing paths listed) · malformed or duplicate slugs ·
 `tools` that is not a plain allowlist (`+name`/`-name` modifiers, shell quoting,
 or an empty list) · a lane leaving MCP enabled while its `tools` names neither
-`codemode` nor `tool_search` · wave slug already exists · `timeoutBin`/`piBin`
+`codemode` nor `tool_search` · a brief carrying a fenced `bash`/`sh`/`shell`/`zsh`
+block while its lane's `tools` grants no `bash` (grant `bash` or unfence — quoted
+output belongs in a `text` fence) · wave slug already exists · `timeoutBin`/`piBin`
 not found on `PATH`.
 
 ### MCP and web reach

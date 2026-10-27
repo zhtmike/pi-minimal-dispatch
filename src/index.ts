@@ -32,7 +32,7 @@ import {
 	writeManifestAtomic,
 } from "./derive.ts";
 import { formatStatusBarSummary, formatWaveStatus } from "./format.ts";
-import { type LaneParams, assertLaneTools, assertSlugs, buildLaneArgs, laneEnv, missingBriefs, resolveExecutable, selectKillTargets } from "./lane.ts";
+import { type LaneParams, assertBriefTools, assertLaneTools, assertSlugs, buildLaneArgs, laneEnv, missingBriefs, resolveExecutable, selectKillTargets } from "./lane.ts";
 
 /** Spawn one lane detached; a failure at any step becomes the record's spawnError, never a throw. */
 function spawnLane(workDir: string, wave: string, lane: LaneParams, cfg: DispatchConfig, timeoutBin: string): LaneRecord {
@@ -144,6 +144,8 @@ const dispatchTool = defineTool({
 
 		// Tool contracts are validated before the manifest claim: a post-claim throw would strand the slug.
 		assertLaneTools(params.lanes);
+		// A brief that demands a shell the lane lacks fails here, not mid-run after spawn.
+		assertBriefTools(params.lanes);
 
 		// Claim the wave slug atomically; an existing manifest rejects it.
 		const manifestPath = manifestPathFor(workDir, params.wave);
