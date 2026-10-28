@@ -17,6 +17,7 @@ import {
 	type LaneRecord,
 	type LaneStatus,
 	type Manifest,
+	artifactPathFor,
 	currentOwner,
 	deriveLane,
 	finalAssistantText,
@@ -27,6 +28,7 @@ import {
 	psLstart,
 	readManifest,
 	releaseWave,
+	unconsumedTranscripts,
 	waitForTerminal,
 	waveTerminal,
 	writeManifestAtomic,
@@ -115,7 +117,7 @@ const dispatchTool = defineTool({
 				name: Type.String({ description: "Lane slug (kebab-case, max 64 chars, unique within the wave)" }),
 				briefPath: Type.String({ description: "Path to the lane's brief file (@file prompt)" }),
 				model: Type.Optional(Type.String({ description: "Pin a model id for this lane; omitted: pi's configured default model — not necessarily the dispatcher session's active model. Accepts pi's `id:thinking` suffix (e.g. 'zai/glm-4.6:high')" })),
-				thinking: Type.Optional(StringEnum(["off", "minimal", "low", "medium", "high", "xhigh", "max"], { description: "Pin a thinking level (pi's --thinking vocabulary); wins over any `:level` suffix in model" })),
+				thinking: Type.Optional(StringEnum(["off", "minimal", "low", "medium", "high", "xhigh", "max"], { description: "Pin a thinking level (pi's --thinking vocabulary); wins over any `:level` suffix in model. pi clamps the level to the model's capabilities — status reports the actual level" })),
 				deadlineSec: Type.Optional(Type.Number({ description: "Deadline leash in seconds (config default: 900)", minimum: 1 })),
 				tools: Type.Optional(Type.String({ description: "Tool allowlist for --tools; omitted: 'read,grep,find,ls' — add 'bash' when a lane must run commands (bash can still invoke git). Plain names or mcp__/tool patterns only: +name/-name modifiers, shell quoting, and empty lists are rejected. With mcp enabled, MCP/web tools are reachable only through 'codemode' or 'tool_search' named here ('mcp__server__*' entries declare tools directly only for direct-exposure servers)" })),
 				noExtensions: Type.Optional(Type.Boolean({ description: "Pass -ne (drop extensions incl. MCP)" })),
@@ -234,7 +236,9 @@ const lanesTool = defineTool({
 		"fresh — works across sessions, including after the dispatcher exited. A collected lane is a path plus " +
 		"`suspect`; `suspect: true` means the artifact is not done — read the file only to judge it, do not paste " +
 		"it back. action=release: delete exactly a settled wave's own files — the manifest-enumerated " +
-		"briefs/events/err, collect artifacts, and the manifest; refuses unsettled and foreign-owned waves. " +
+		"briefs/events/err, collect artifacts, and the manifest; refuses unsettled, foreign-owned, and " +
+		"unconsumed waves (a spawned lane's events file present without its collect artifact — collect " +
+		"first; a human may delete the files by hand). " +
 		"Discover waves: ls <workDir>/*-manifest.json.",
 	parameters: Type.Object({
 		wave: Type.String({ description: "Wave slug" }),
@@ -334,6 +338,12 @@ const lanesTool = defineTool({
 			if (!waveTerminal(manifest.lanes, Date.now())) {
 				throw new Error(`wave '${params.wave}' is not settled — wait or kill first`);
 			}
+			const unconsumed = unconsumedTranscripts(manifest);
+			if (unconsumed.length > 0) {
+				throw new Error(
+					`wave '${params.wave}' has unconsumed lane transcripts (${unconsumed.join(", ")}) — collect first; a human may clean up by hand`,
+				);
+			}
 			const { deleted, absent } = releaseWave(manifest);
 			tracked.delete(params.wave); // the wave is gone; do not wait for the next statusbar tick
 			return {
@@ -362,7 +372,7 @@ const lanesTool = defineTool({
 			}
 			const text = finalAssistantText(parseEvents(lane.eventsPath));
 			const suspect = status.state === "failed" || text === "" || status.stopReason !== "stop";
-			const artifact = path.join(workDir, `${params.wave}-${lane.name}.md`);
+			const artifact = artifactPathFor(manifest, lane);
 			fs.writeFileSync(artifact, text.endsWith("\n") || text === "" ? text : text + "\n");
 			results.push({ name: lane.name, artifact, suspect, stopReason: status.stopReason });
 		}

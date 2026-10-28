@@ -100,4 +100,8 @@ ownership, a mangled spawn line dies silently, and truncation, crash, and
 never-started are indistinguishable after the fact. Everything in the
 current surface — detached process groups, the `timeout -k` leash, the
 manifest, derived state — exists to make those four failures visible
-instead of silent.
+instead of silent. The release guard extends the same thesis to cleanup:
+refusing to delete a spawned lane's transcript until `collect` has consumed
+it makes silent irreversible loss visible too. Salvage itself is deliberately
+not an action — deciding what in a dead lane's transcript counts as findings
+is judgment, and judgment in this design belongs to a lane with a brief.

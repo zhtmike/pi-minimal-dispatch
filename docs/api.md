@@ -21,7 +21,7 @@ the leash. Events stream to `<workDir>/<wave>-<name>.events.jsonl`.
 | `lanes[].name` | string | — | Lane slug: `kebab-case`, max 64 chars |
 | `lanes[].briefPath` | string | — | Path to the lane's brief file (its `@file` prompt) |
 | `lanes[].model` | string? | pi default | Pin a model id; omitted: pi's **configured default model** — not the dispatcher session's active model. Accepts pi's `id:thinking` suffix (e.g. `zai/glm-4.6:high`) |
-| `lanes[].thinking` | `off\|minimal\|low\|medium\|high\|xhigh\|max`? | none | Pin a thinking level (pi's `--thinking`); wins over any `:level` suffix in `model` |
+| `lanes[].thinking` | `off\|minimal\|low\|medium\|high\|xhigh\|max`? | none | Pin a thinking level (pi's `--thinking`); wins over any `:level` suffix in `model`. pi clamps the level to the model's capabilities — status reports the actual level |
 | `lanes[].deadlineSec` | number? | `deadlineSec` config (900) | Leash in seconds; holds even if the dispatcher is gone. Minimum 1 |
 | `lanes[].tools` | string? | `read,grep,find,ls` | Tool allowlist for `--tools` — plain names or `*` patterns; no `+name`/`-name` modifiers, no shell quoting, not empty. Add `bash` when a lane must run commands (bash can still invoke git). With MCP enabled, reach requires `codemode` or `tool_search` here — see [MCP and web reach](#mcp-and-web-reach) |
 | `lanes[].noExtensions` | boolean? | false | Pass `-ne` (drop extensions incl. MCP in the lane) |
@@ -153,6 +153,9 @@ among the enumerated set are tolerated (idempotent). Result:
 Refused (a thrown error, wave retained) when:
 
 - the wave is not settled/failed yet — `wait` or `kill` first;
+- a spawned lane's events file exists without its collect artifact — an
+  unconsumed transcript; `collect` first. Keyed on events presence, so a wave
+  whose events files are already gone stays releasable (idempotent);
 - the manifest's `owner` names a **live foreign session** (same host, pid
   alive with matching start-time) — only the dispatching session, or any
   session once the owner is provably dead, may release;
@@ -162,6 +165,17 @@ Refused (a thrown error, wave retained) when:
   closed, never guessed.
 
 The refusals bind sessions, not people: a human may always delete by hand.
+
+### Recovering partial work
+
+The events file `<wave>-<name>.events.jsonl` is pi's documented JSON event
+stream (pi's JSON event-stream docs are its canonical reference) and holds
+the lane's full transcript — every assistant message and tool result — until
+`release` deletes it. A failed lane (deadline, killed, crashed) therefore
+loses nothing that reached the stream: salvage it by dispatching a cheap
+reader lane whose brief points at the events file, or grep it by hand.
+`collect`'s artifact is the **last** assistant message only — for a failed
+lane it is a fragment, not the findings; treat it as suspect.
 
 ## Configuration
 

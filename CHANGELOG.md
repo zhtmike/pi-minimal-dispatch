@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- A failed lane's work is no longer destroyed with it: `release` refuses while
+  a spawned lane's events file (pi's documented JSON event stream — the full
+  transcript, every assistant message and tool result) exists without its
+  collect artifact — an unconsumed transcript; `collect` first, and a human
+  may always delete by hand. Keyed on events presence, so a partially deleted
+  wave stays releasable, and a lane that never spawned (which `collect`
+  refuses) never blocks. docs/api.md gains "Recovering partial work": salvage
+  is a reader lane over the events file or a hand grep — `collect`'s artifact
+  for a failed lane is the last assistant message only. The `thinking` pin is
+  documented as clamped to the model's capabilities (status reports the
+  actual level).
+
 ## 0.3.2 — 2026-10-27
 
 - Wave cleanup became a tool boundary: the manifest records the dispatcher's

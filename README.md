@@ -86,7 +86,9 @@ The ceremony: *write briefs → `dispatch` → `wait` (or poll `status`) →
 `collect` → `release`*. `dispatch` never blocks; waiting is an explicit,
 bounded `wait` call that returns the status table the moment every lane
 is `settled`/`failed` — no sleep-then-poll guessing. `release` deletes exactly
-the wave's own files and refuses unsettled or foreign-owned waves — a
+the wave's own files and refuses unsettled, foreign-owned, and unconsumed
+waves (a spawned lane's events transcript without its collect artifact —
+collect first; see [Recovering partial work](docs/api.md#recovering-partial-work)) — a
 hand-sweep of the workDir destroys whatever a sibling session left there.
 **Steering** is
 kill + redispatch: refine the brief, run a new wave (slugs are
