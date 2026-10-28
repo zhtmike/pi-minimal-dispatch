@@ -34,7 +34,7 @@ import {
 	writeManifestAtomic,
 } from "./derive.ts";
 import { formatStatusBarSummary, formatWaveStatus } from "./format.ts";
-import { type LaneParams, assertBriefTools, assertLaneTools, assertSlugs, buildLaneArgs, laneEnv, missingBriefs, resolveExecutable, selectKillTargets } from "./lane.ts";
+import { type LaneParams, assertBriefTools, assertLaneTools, assertSlugs, buildLaneArgs, laneEnv, missingBriefs, missingBriefsError, resolveExecutable, selectKillTargets } from "./lane.ts";
 
 /** Spawn one lane detached; a failure at any step becomes the record's spawnError, never a throw. */
 function spawnLane(workDir: string, wave: string, lane: LaneParams, cfg: DispatchConfig, timeoutBin: string): LaneRecord {
@@ -119,7 +119,7 @@ const dispatchTool = defineTool({
 				model: Type.Optional(Type.String({ description: "Pin a model id for this lane; omitted: pi's configured default model — not necessarily the dispatcher session's active model. Accepts pi's `id:thinking` suffix (e.g. 'zai/glm-4.6:high')" })),
 				thinking: Type.Optional(StringEnum(["off", "minimal", "low", "medium", "high", "xhigh", "max"], { description: "Pin a thinking level (pi's --thinking vocabulary); wins over any `:level` suffix in model. pi clamps the level to the model's capabilities — status reports the actual level" })),
 				deadlineSec: Type.Optional(Type.Number({ description: "Deadline leash in seconds (config default: 900)", minimum: 1 })),
-				tools: Type.Optional(Type.String({ description: "Tool allowlist for --tools; omitted: 'read,grep,find,ls' — add 'bash' when a lane must run commands (bash can still invoke git). Plain names or mcp__/tool patterns only: +name/-name modifiers, shell quoting, and empty lists are rejected. With mcp enabled, MCP/web tools are reachable only through 'codemode' or 'tool_search' named here ('mcp__server__*' entries declare tools directly only for direct-exposure servers)" })),
+				tools: Type.Optional(Type.String({ description: "Tool allowlist for --tools; omitted: 'read,grep,find,ls' — add 'bash' when a lane must run commands (bash can still invoke git — and can write anywhere the dispatcher can: don't grant it to read-only lanes in a shared checkout; give write-capable lanes a scratch dir outside the repo). Plain names or mcp__/tool patterns only: +name/-name modifiers, shell quoting, and empty lists are rejected. With mcp enabled, MCP/web tools are reachable only through 'codemode' or 'tool_search' named here ('mcp__server__*' entries declare tools directly only for direct-exposure servers)" })),
 				noExtensions: Type.Optional(Type.Boolean({ description: "Pass -ne (drop extensions incl. MCP)" })),
 				mcp: Type.Optional(Type.Boolean({ description: "Set false to pass --no-mcp (no MCP servers connect). Servers connecting alone grants no reach: with mcp enabled, tools must name 'codemode' or 'tool_search' or dispatch rejects the lane" })),
 			}),
@@ -141,7 +141,7 @@ const dispatchTool = defineTool({
 		// All briefs must exist before anything spawns: report every missing one.
 		const missing = missingBriefs(params.lanes);
 		if (missing.length > 0) {
-			throw new Error(`brief file(s) not found: ${missing.join(", ")} — nothing spawned`);
+			throw new Error(missingBriefsError(missing));
 		}
 
 		// Tool contracts are validated before the manifest claim: a post-claim throw would strand the slug.

@@ -7,7 +7,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { DEFAULT_LANE_TOOLS, assertBriefTools, assertLaneTools, assertSlugs, buildLaneArgs, laneEnv, missingBriefs, resolveExecutable, selectKillTargets, toolEntries } from "../src/lane.ts";
+import { DEFAULT_LANE_TOOLS, assertBriefTools, assertLaneTools, assertSlugs, buildLaneArgs, laneEnv, missingBriefs, missingBriefsError, resolveExecutable, selectKillTargets, toolEntries } from "../src/lane.ts";
 import type { LaneParams } from "../src/lane.ts";
 import type { LaneRecord } from "../src/derive.ts";
 
@@ -50,6 +50,16 @@ check("briefs: every missing path listed, existing kept", (() => {
 	return missing.length === 2 && missing.includes(briefs[1].briefPath) && missing.includes(briefs[2].briefPath);
 })());
 check("briefs: a directory is not a brief", missingBriefs([{ name: "d", briefPath: tmp }]).length === 1);
+check(
+	"briefs: missing paths are resolved absolute (what the refusal names)",
+	missingBriefs([{ name: "r", briefPath: "relative-gone.md" }], tmp)[0] === path.join(tmp, "relative-gone.md"),
+);
+const refusal = missingBriefsError(["/x/gone.md"]);
+check(
+	"briefs: refusal names paths and the parallel-batch remedy",
+	refusal.includes("/x/gone.md") && refusal.includes("nothing spawned") && refusal.includes("parallel tool-call batch") && refusal.includes("re-run the same dispatch"),
+	refusal,
+);
 
 // --- resolveExecutable ------------------------------------------------------
 

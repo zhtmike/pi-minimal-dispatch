@@ -44,14 +44,23 @@ export function assertSlugs(wave: string, names: string[]): void {
 	if (bad.length > 0) throw new Error(`slugs must be kebab-case [a-z0-9-], max 64 chars, unique: ${bad.join(", ")}`);
 }
 
-/** Return every brief path that does not resolve to an existing regular file. */
+/** Resolved absolute paths of every lane brief that does not exist as a file. */
 export function missingBriefs(lanes: LaneParams[], cwd: string = process.cwd()): string[] {
 	const missing: string[] = [];
 	for (const lane of lanes) {
 		const abs = path.resolve(cwd, lane.briefPath);
-		if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) missing.push(lane.briefPath);
+		if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) missing.push(abs);
 	}
 	return missing;
+}
+
+/** The dispatch-time refusal: resolved paths plus the parallel-batch remedy (a write batched with dispatch races the check). */
+export function missingBriefsError(missing: string[]): string {
+	return (
+		`brief file(s) not found: ${missing.join(", ")} — nothing spawned. ` +
+		"A brief written in the same parallel tool-call batch as this dispatch can still be in flight: " +
+		"re-run the same dispatch after the write returns."
+	);
 }
 
 /** Resolve an executable on PATH; a directory on PATH is not an executable. */
