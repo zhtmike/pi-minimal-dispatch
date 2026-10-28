@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.3 — 2026-10-28
 
 - A failed lane's work is no longer destroyed with it: `release` refuses while
   a spawned lane's events file (pi's documented JSON event stream — the full
