@@ -176,14 +176,31 @@ export function ownerGuard(owner: WaveOwner | undefined, selfSid: string, curren
 	}
 }
 
+/** The one artifact path collect writes, release deletes, and the release guard checks. */
+export function artifactPathFor(m: Manifest, lane: LaneRecord): string {
+	return path.join(m.workDir, `${m.wave}-${lane.name}.md`);
+}
+
 /** Every file a release may delete: manifest-enumerated paths, collect artifacts, the manifest. */
 export function releasePaths(m: Manifest): string[] {
 	const paths: string[] = [];
 	for (const lane of m.lanes) {
-		paths.push(lane.briefPath, lane.eventsPath, lane.errPath, path.join(m.workDir, `${m.wave}-${lane.name}.md`));
+		paths.push(lane.briefPath, lane.eventsPath, lane.errPath, artifactPathFor(m, lane));
 	}
 	paths.push(manifestPathFor(m.workDir, m.wave));
 	return paths;
+}
+
+/**
+ * Spawned lanes whose transcript was never consumed: events file present, collect artifact absent.
+ * Keyed on events presence (idempotent release); a never-spawned lane can never be collected.
+ */
+export function unconsumedTranscripts(m: Manifest): string[] {
+	const names: string[] = [];
+	for (const lane of m.lanes) {
+		if (lane.spawned && fs.existsSync(lane.eventsPath) && !fs.existsSync(artifactPathFor(m, lane))) names.push(lane.name);
+	}
+	return names;
 }
 
 /** Delete exactly `releasePaths(m)`, tolerating already-deleted files. The decision is the caller's. */

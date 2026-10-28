@@ -1,6 +1,6 @@
 /**
  * Unit tests for the release/ownership core in src/derive.ts — ownerStatus,
- * ownerGuard, releasePaths, releaseWave. Run: node tests/release.test.ts
+ * ownerGuard, releasePaths, releaseWave, unconsumedTranscripts. Run: node tests/release.test.ts
  * (cheap CPU: files + ps only, no network/model)
  */
 
@@ -17,6 +17,7 @@ import {
 	psLstart,
 	releasePaths,
 	releaseWave,
+	unconsumedTranscripts,
 	waveTerminal,
 } from "../src/derive.ts";
 
@@ -141,6 +142,31 @@ const running = manifest({
 	lanes: [lane({ spawned: true, spawnError: undefined, pid: process.pid, processStart: selfLstart })],
 });
 check("live running lane keeps the wave non-terminal", waveTerminal(running.lanes, Date.now()) === false);
+
+// --- unconsumed transcripts (the release precondition) ---------------------
+
+const uEvents = path.join(tmp, "w-un.events.jsonl");
+const uArtifact = path.join(tmp, "w-un.md");
+const uWave = manifest({ lanes: [lane({ name: "un", spawned: true, spawnError: undefined, eventsPath: uEvents })] });
+
+check("unconsumed: absent events never blocks (already released)", unconsumedTranscripts(uWave).length === 0);
+
+fs.writeFileSync(uEvents, "fixture\n");
+check(
+	"unconsumed: spawned lane with events but no artifact is named",
+	JSON.stringify(unconsumedTranscripts(uWave)) === JSON.stringify(["un"]),
+	JSON.stringify(unconsumedTranscripts(uWave)),
+);
+
+fs.writeFileSync(uArtifact, "fixture\n");
+check("unconsumed: artifact present means consumed", unconsumedTranscripts(uWave).length === 0);
+
+const nEvents = path.join(tmp, "w-ns.events.jsonl");
+fs.writeFileSync(nEvents, "fixture\n"); // spawnLane opens the events file before spawning
+check(
+	"unconsumed: never-spawned lane never blocks (collect refuses it)",
+	unconsumedTranscripts(manifest({ lanes: [lane({ name: "ns", eventsPath: nEvents })] })).length === 0,
+);
 
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(failures === 0 ? "\nall passed" : `\n${failures} FAILED`);
