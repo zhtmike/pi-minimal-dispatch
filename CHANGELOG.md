@@ -13,6 +13,13 @@
   for a failed lane is the last assistant message only. The `thinking` pin is
   documented as clamped to the model's capabilities (status reports the
   actual level).
+- The missing-brief refusal at dispatch names resolved paths and the
+  parallel-batch remedy: a brief written in the same tool-call batch as the
+  dispatch can still be in flight — re-run the same dispatch after the write
+  returns (root cause observed in the wild: write+dispatch issued as parallel
+  tool calls; the existence check raced the write). The `tools` guidance now
+  says bash can write anywhere the dispatcher can — don't grant it to
+  read-only lanes in a shared checkout.
 
 ## 0.3.2 — 2026-10-27
 

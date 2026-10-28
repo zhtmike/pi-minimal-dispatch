@@ -23,7 +23,7 @@ the leash. Events stream to `<workDir>/<wave>-<name>.events.jsonl`.
 | `lanes[].model` | string? | pi default | Pin a model id; omitted: pi's **configured default model** — not the dispatcher session's active model. Accepts pi's `id:thinking` suffix (e.g. `zai/glm-4.6:high`) |
 | `lanes[].thinking` | `off\|minimal\|low\|medium\|high\|xhigh\|max`? | none | Pin a thinking level (pi's `--thinking`); wins over any `:level` suffix in `model`. pi clamps the level to the model's capabilities — status reports the actual level |
 | `lanes[].deadlineSec` | number? | `deadlineSec` config (900) | Leash in seconds; holds even if the dispatcher is gone. Minimum 1 |
-| `lanes[].tools` | string? | `read,grep,find,ls` | Tool allowlist for `--tools` — plain names or `*` patterns; no `+name`/`-name` modifiers, no shell quoting, not empty. Add `bash` when a lane must run commands (bash can still invoke git). With MCP enabled, reach requires `codemode` or `tool_search` here — see [MCP and web reach](#mcp-and-web-reach) |
+| `lanes[].tools` | string? | `read,grep,find,ls` | Tool allowlist for `--tools` — plain names or `*` patterns; no `+name`/`-name` modifiers, no shell quoting, not empty. Add `bash` when a lane must run commands (bash can still invoke git — and can write anywhere the dispatcher can: don't grant it to read-only lanes in a shared checkout; give write-capable lanes a scratch dir outside the repo). With MCP enabled, reach requires `codemode` or `tool_search` here — see [MCP and web reach](#mcp-and-web-reach) |
 | `lanes[].noExtensions` | boolean? | false | Pass `-ne` (drop extensions incl. MCP in the lane) |
 | `lanes[].mcp` | boolean? | enabled | Set `false` to pass `--no-mcp` (no MCP servers connect). With MCP enabled, `tools` must name `codemode` or `tool_search` or the call is rejected — servers connecting alone never declares MCP tools to the lane |
 | `workDir` | string? | `workDir` config (`.pi/work`) | Directory for manifest, events, and artifacts |
@@ -35,7 +35,10 @@ dispatcher's `owner` — `{ sid, pid, host, lstart }` — which the `kill` and
 immediately; a lane that failed to spawn appears as `SPAWN ERROR: …`.
 
 **Errors** (the whole call fails, zero lanes spawned, no slug claimed):
-a brief file missing (all missing paths listed) · malformed or duplicate slugs ·
+a brief file missing (all missing paths listed as resolved absolute paths —
+a brief written in the same parallel tool-call batch as this dispatch can
+still be in flight; re-run the same dispatch after the write returns) ·
+malformed or duplicate slugs ·
 `tools` that is not a plain allowlist (`+name`/`-name` modifiers, shell quoting,
 or an empty list) · a lane leaving MCP enabled while its `tools` names neither
 `codemode` nor `tool_search` · a brief carrying a fenced `bash`/`sh`/`shell`/`zsh`
