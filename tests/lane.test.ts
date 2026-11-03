@@ -248,6 +248,20 @@ check(
 	"action params: waitMode value itself is validated on wait",
 	throwsWith(() => assertActionParams("wait", { waitMode: "bogus" }), `waitMode must be "all" or "any"`),
 );
+check(
+	"action params: inlineMaxBytes accepted by collect only, rejected elsewhere naming collect",
+	(() => {
+		assertActionParams("collect", { inlineMaxBytes: 512 });
+		assertActionParams("collect", { inlineMaxBytes: 0 });
+		return throwsWith(() => assertActionParams("status", { inlineMaxBytes: 512 }), "applies only to: collect");
+	})(),
+);
+check(
+	"action params: inlineMaxBytes rejects negative and non-integer values",
+	throwsWith(() => assertActionParams("collect", { inlineMaxBytes: -1 }), "integer >= 0") &&
+		throwsWith(() => assertActionParams("collect", { inlineMaxBytes: 1.5 }), "integer >= 0") &&
+		throwsWith(() => assertActionParams("collect", { inlineMaxBytes: "512" }), "integer >= 0"),
+);
 
 // --- resolveLaneFilter ------------------------------------------------------
 

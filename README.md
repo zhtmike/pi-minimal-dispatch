@@ -105,12 +105,14 @@ Two tools — full parameter, output, and configuration reference in
   claim the wave slug atomically, spawn every lane detached in its own
   process group, return in under a second. Per-lane: `model`, `thinking`,
   `deadlineSec`, `tools`, `noExtensions`, `mcp`.
-- **`lanes`** `{wave, action?, lane?, waitMode?, waitSec?, workDir?}` — stateless `status` /
+- **`lanes`** `{wave, action?, lane?, waitMode?, waitSec?, inlineMaxBytes?, workDir?}` — stateless `status` /
   `wait` / `kill` / `collect` / `release` over the wave's manifest; any
   session can re-adopt a wave, including after the dispatcher exited.
   `kill` and `collect` accept `lane: [names]` to target a subset — untargeted
   lanes are untouched; `wait` accepts `waitMode: "any"` to return at the
-  first terminal lane instead of the last.
+  first terminal lane instead of the last; `collect` accepts
+  `inlineMaxBytes` to inline each non-suspect artifact's content in the
+  output when it fits.
 
 **Web/MCP reach**: the default lane is offline. MCP servers connecting
 grants nothing by themselves — a lane reaches their tools only through
