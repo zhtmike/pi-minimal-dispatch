@@ -10,7 +10,7 @@ import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import { hostname } from "node:os";
 import * as path from "node:path";
-import { StringEnum, Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { defineTool, type AgentToolResult, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { type DispatchConfig, loadConfig } from "./config.ts";
 import {
@@ -35,6 +35,14 @@ import {
 } from "./derive.ts";
 import { formatStatusBarSummary, formatWaveStatus } from "./format.ts";
 import { type LaneParams, assertBriefTools, assertLaneTools, assertSlugs, buildLaneArgs, laneEnv, missingBriefs, missingBriefsError, resolveExecutable, selectKillTargets } from "./lane.ts";
+
+/**
+ * `Type.Unsafe` keeps the literal-union typing that `defineTool`'s TypeBox inference reads;
+ * the emitted `{ type: "string", enum: [...] }` matches pi-ai's `StringEnum`.
+ */
+function stringEnum<T extends readonly string[]>(values: T, options?: { description?: string }) {
+	return Type.Unsafe<T[number]>({ type: "string", enum: [...values], ...(options?.description ? { description: options.description } : {}) });
+}
 
 /** Spawn one lane detached; a failure at any step becomes the record's spawnError, never a throw. */
 function spawnLane(workDir: string, wave: string, lane: LaneParams, cfg: DispatchConfig, timeoutBin: string): LaneRecord {
@@ -117,7 +125,7 @@ const dispatchTool = defineTool({
 				name: Type.String({ description: "Lane slug (kebab-case, max 64 chars, unique within the wave)" }),
 				briefPath: Type.String({ description: "Path to the lane's brief file (@file prompt)" }),
 				model: Type.Optional(Type.String({ description: "Pin a model id for this lane; omitted: pi's configured default model — not necessarily the dispatcher session's active model. Accepts pi's `id:thinking` suffix (e.g. 'zai/glm-4.6:high')" })),
-				thinking: Type.Optional(StringEnum(["off", "minimal", "low", "medium", "high", "xhigh", "max"], { description: "Pin a thinking level (pi's --thinking vocabulary); wins over any `:level` suffix in model. pi clamps the level to the model's capabilities — status reports the actual level" })),
+				thinking: Type.Optional(stringEnum(["off", "minimal", "low", "medium", "high", "xhigh", "max"], { description: "Pin a thinking level (pi's --thinking vocabulary); wins over any `:level` suffix in model. pi clamps the level to the model's capabilities — status reports the actual level" })),
 				deadlineSec: Type.Optional(Type.Number({ description: "Deadline leash in seconds (config default: 900)", minimum: 1 })),
 				tools: Type.Optional(Type.String({ description: "Tool allowlist for --tools; omitted: 'read,grep,find,ls' — add 'bash' when a lane must run commands (bash can still invoke git — and can write anywhere the dispatcher can: don't grant it to read-only lanes in a shared checkout; give write-capable lanes a scratch dir outside the repo). Plain names or mcp__/tool patterns only: +name/-name modifiers, shell quoting, and empty lists are rejected. With mcp enabled, MCP/web tools are reachable only through 'codemode' or 'tool_search' named here ('mcp__server__*' entries declare tools directly only for direct-exposure servers)" })),
 				noExtensions: Type.Optional(Type.Boolean({ description: "Pass -ne (drop extensions incl. MCP)" })),
@@ -242,7 +250,7 @@ const lanesTool = defineTool({
 		"Discover waves: ls <workDir>/*-manifest.json.",
 	parameters: Type.Object({
 		wave: Type.String({ description: "Wave slug" }),
-		action: Type.Optional(StringEnum(["status", "wait", "kill", "collect", "release"])),
+		action: Type.Optional(stringEnum(["status", "wait", "kill", "collect", "release"])),
 		waitSec: Type.Optional(Type.Number({ description: "wait action only: max seconds to hold the call open (default 300; 1–3600)", minimum: 1, maximum: 3600 })),
 		workDir: Type.Optional(Type.String({ description: "Directory holding the manifest (config default: .pi/work)" })),
 	}),

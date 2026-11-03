@@ -50,6 +50,8 @@ node tests/lane.test.ts       # must pass
 node tests/release.test.ts    # must pass
 ```
 
-The pi host API surface used here (`defineTool`, `Type`, `StringEnum`,
-`ExtensionAPI`, `registerTool`) is verified against the installed pi package —
+The pi host API surface used here (`defineTool`, `ExtensionAPI`,
+`registerTool`, `Type` from `typebox`; plus a local `stringEnum` helper in
+place of pi-ai's) is verified
+against the installed pi package —
 check a current pi checkout before changing imports.

@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.3.4 — 2026-11-03
+
+- pi 1.5.0 compatibility, typecheck-tier only. pi-ai 1.5.0 stopped re-exporting
+  TypeBox, and its `StringEnum` now returns a pi-schema `Schema<T>` whose static
+  type TypeBox inference — the parameter typing `defineTool` derives — collapses
+  to `unknown`; the CI canary typechecking against bare `@earendil-works/pi-ai@latest`
+  failed with `has no exported member 'Type'`. `Type` now imports from `typebox`,
+  pi's documented import for new code, mapped by the extension loader on both the
+  1.4.0 floor and 1.5.0; `stringEnum` is a local `Type.Unsafe` helper emitting the
+  same `{ type: "string", enum: [...] }` schema with the literal-union typing kept.
+  Runtime was never broken — pi's loader maps the old `@earendil-works/pi-ai`
+  import to its compat entry, and 0.3.3 loads and registers its tools under 1.5.0
+  unchanged — so this is a canary-green release, not a runtime fix: typechecked
+  against both the 1.4.0 floor and 1.5.0, unit suites pass.
+
 ## 0.3.3 — 2026-10-28
 
 - A failed lane's work is no longer destroyed with it: `release` refuses while
