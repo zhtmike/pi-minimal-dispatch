@@ -43,16 +43,15 @@ one deliberately small surface.
    the caller dispatches sequentially; the tool refuses to guess that for
    it.
 4. **Zero runtime dependencies.** Node builtins plus a small host-API
-   surface: `defineTool` from the pi host, `Type` from `typebox` (pi's
-   documented import for schema definitions, mapped by the host loader),
-   and a local `stringEnum` helper where pi-ai's `StringEnum` lost its
-   TypeBox-inferable static type; `registerTool`, `registerCommand`,
-   `on("session_start"|"session_shutdown")`,
-   and `ctx.ui.setStatus` from the pi host; `getCapabilities`, `hyperlink`,
-   and `Markdown` from `@earendil-works/pi-tui` plus `getMarkdownTheme`
-   from the pi host (the host loader's alias of its own copy — host-provided
-   packages, never dependency entries).
-   Plain TypeScript, no build step (pi runs extensions via jiti).
+   surface: `defineTool`, `registerTool`, `registerCommand`, session
+   events, and `ctx.ui.setStatus` from the pi host; `getCapabilities`,
+   `hyperlink`, and `Markdown` from `@earendil-works/pi-tui` plus
+   `getMarkdownTheme` from the pi host (loader-aliased host copies —
+   never dependency entries); `Type` from `typebox` — pi's documented
+   import, mapped by the host loader on both the 1.4.0 floor and 1.5.0 —
+   beside a local `stringEnum` helper that keeps the literal-union typing
+   pi-ai's `StringEnum` lost. Plain TypeScript, no build step (pi runs
+   extensions via jiti).
 
 ## Mechanics
 
@@ -72,8 +71,7 @@ one deliberately small surface.
   TUI conveniences over this derived state; `/lanes` additionally lists
   waves across workDirs via its own fail-soft scanner and inspects single
   lanes from the same event streams — TUI-owned derivation, never wired to
-  the tool surface. `--print`/`--mode json` sessions see status through the
-  `lanes` tool alone.
+  the tool surface.
 
 ## Non-goals
 

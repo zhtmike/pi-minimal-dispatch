@@ -86,118 +86,69 @@ The ceremony: *write briefs → `dispatch` → `wait` (or poll `status`) →
 `collect` → `release`*. `dispatch` never blocks; waiting is an explicit,
 bounded `wait` call that returns the status table the moment every lane
 is `settled`/`failed` — no sleep-then-poll guessing. In the TUI, a
-`collect` result is expandable (ctrl+o / click): the collapsed line is
-the collect text as-is; the expanded block markdown-renders each lane's
-artifact from a snapshot taken at collect time (capped at 16 kB per
-lane) — the block stays honest even after `release` deletes the files.
-That snapshot rides the result's `details` channel, which never reaches
-the model but is persisted into the session transcript — repeated
-`collect` calls repeat the snapshot; nothing is read from disk to
-render it. `release` deletes exactly
-the wave's own files and refuses unsettled, foreign-owned, and unconsumed
-waves (a spawned lane's events transcript without its collect artifact —
-collect first; see [Recovering partial work](docs/api.md#recovering-partial-work)) — a
-hand-sweep of the workDir destroys whatever a sibling session left there.
-**Steering** is
-kill + redispatch: refine the brief, run a new wave (slugs are
-single-use). **Hang detection**: `lastEventAgeSec` is the signal — no
-event growth for ~2× the lane's normal turn latency ⇒ `kill` and
-redispatch.
+`collect` result expands (ctrl+o / click) to render each lane's artifact
+in place. `release` deletes exactly the wave's own files and refuses
+unsettled, foreign-owned, and unconsumed waves — collect first, and a
+human may always delete by hand ([details](docs/api.md#release)).
+**Steering** is kill + redispatch: refine the brief, run a new wave
+(slugs are single-use). **Hang detection**: `lastEventAgeSec` is the
+signal — no event growth for ~2× the lane's normal turn latency ⇒
+`kill` and redispatch.
 
 ## API
 
 Two tools — full parameter, output, and configuration reference in
-[docs/api.md](docs/api.md).
+[docs/api.md](docs/api.md):
 
-- **`dispatch`** `{wave, lanes[], workDir?}` — validate briefs and slugs,
-  claim the wave slug atomically, spawn every lane detached in its own
-  process group, return in under a second. Per-lane: `model`, `thinking`,
-  `deadlineSec`, `tools`, `noExtensions`, `mcp`.
-- **`lanes`** `{wave, action?, lane?, waitMode?, waitSec?, inlineMaxBytes?, workDir?}` — stateless `status` /
-  `wait` / `kill` / `collect` / `release` over the wave's manifest; any
-  session can re-adopt a wave, including after the dispatcher exited.
-  `kill` and `collect` accept `lane: [names]` to target a subset — untargeted
-  lanes are untouched; `wait` accepts `waitMode: "any"` to return at the
-  first terminal lane instead of the last; `collect` accepts
-  `inlineMaxBytes` to inline each non-suspect artifact's content in the
-  output when it fits.
+- **`dispatch`** — validate briefs, claim the wave slug, spawn every
+  lane detached in its own process group; returns in under a second.
+- **`lanes`** — stateless `status` / `wait` / `kill` / `collect` /
+  `release` over the wave's manifest; any session can re-adopt a wave,
+  including after the dispatcher exited.
 
-**Web/MCP reach**: the default lane is offline. MCP servers connecting
-grants nothing by themselves — a lane reaches their tools only through
-`codemode` or `tool_search` named in its `tools`, and `dispatch` rejects
-a lane that leaves MCP enabled without a route. Rules and examples:
+**Web/MCP reach**: the default lane is offline — MCP servers connecting
+grants nothing by themselves; a lane reaches their tools only through
+`codemode` or `tool_search` named in its `tools`. Rules and examples:
 [MCP and web reach](docs/api.md#mcp-and-web-reach).
 
 ## Configuration
 
-The lane protocol is fixed (`--mode json --no-session -ns` — lanes never
-load skills); every variable knob is configurable — `workDir`,
-`deadlineSec` (900), `killGraceMs` (5000), `pollMs` (2000), `piBin`,
-`timeoutBin` — merged defaults → user file → project file → per-call
+The lane protocol is fixed; every variable knob — deadlines, kill
+grace, poll interval, working directory, binaries — is configurable via
+user or project JSON, merged defaults → user → project → per-call
 parameters. Invalid files fail loudly. Full table and precedence rules:
 [docs/api.md](docs/api.md#configuration).
 
 ## Status bar & `/lanes`
 
 While any tracked lane runs — or has failed and the wave is not yet
-released — the footer shows one line. Segments sit in a fixed order,
-empty ones dropped: `[telemetry | running-count] · [idle/overdue
-badge] · [failed badge] · [settled/failed counts]`, e.g.
-`lanes: 2 running · 1 failed (deadline) · 1 settled`. An unreleased
-failure keeps the footer (and its poll tick) alive until the wave is
-released; a fully settled wave clears it. A `running` lane silent for
-≥ 60s badges `(1 idle 75s)` with its honest last-event age — a signal,
-not a verdict: a lane legitimately inside a long `bash` run trips it
-too. A lane past its deadline badges `(1 overdue)` (the badge is a
-signal; the kill-and-redispatch discipline still decides). When exactly
-one lane is running, the count becomes micro-telemetry —
-`lanes [survey/docs]: running (turn 3 · bash · last 12s)` — the
-in-flight tool from the latest unmatched `tool_execution_start`;
-`tool_execution_start` carries no timestamp, so no tool age is shown.
+released — the footer shows one line:
 
-`/lanes` has three forms. Bare `/lanes` lists every wave with a
-manifest in the default workDir plus this session's tracked workDirs —
-lane count, aggregate state, a `(prior session)` tag on waves from a
-dead or unidentifiable dispatcher, corrupt manifests listed with their
-error — and ends with the grammar line. `/lanes <wave>` prints the
-per-lane table under a wave header (wall clock since dispatch, summed
-tokens and cost). `/lanes <wave> <lane>` inspects one lane: settled
-lanes show metadata, a recent tool trace, and the artifact (or `not
-yet collected`); running lanes show the live trace — tool names with
-one-line, 80-char argument snippets, the open tool marked in flight,
-the last assistant text; failed lanes show cause, `.err` tail, and
-transcript/err paths. Failed lanes in the wave table also list their
-transcript and `.err` paths, clickable when the terminal proves
-capable (pi's own OSC 8 gate — `PI_HYPERLINKS` overrides; plain
-absolute/`~` paths otherwise). A click opens the absolute `file://`
-target — it works exactly where the terminal's machine can reach the
-file, so under SSH+tmux the paths are for copy-paste. Completion is
-two-level: wave slugs first, then lane slugs of the selected wave
-(type letters to filter, Tab to apply). Each table line tags the lane
-with its model —
-short id (provider prefix dropped), `think:<level>` appended when set —
-the actual model from the event stream once generation begins, the
-pinned value before that, `[default]` for a no-pin lane that hasn't
-started. Walkthrough: `dispatch` a two-lane scout wave; bare `/lanes`
-lists `scouts — 2 lanes · 2 running`; once the footer shows them
-settled, `/lanes scouts` confirms both lanes and `/lanes scouts docs`
-reads the artifact in the TUI — zero model tokens. Both surfaces are
-TUI conveniences over the same derived state the `lanes` tool reports;
-`--print`/`--mode json` sessions see status through the tool alone.
+```text
+lanes: 2 running · 1 failed (deadline) · 1 settled
+lanes [survey/docs]: running (turn 3 · bash · last 12s)   ← one lane running
+```
+
+A lane gone quiet badges `(1 idle 75s)`; a lane past its deadline badges
+`(1 overdue)` — signals, not verdicts. `/lanes` inspects waves without
+spending model tokens: bare `/lanes` lists every wave, `/lanes <wave>`
+prints the full table, `/lanes <wave> <lane>` shows one lane in detail —
+its trace, its artifact, its failure. Failed lanes link their transcript
+and `.err` where the terminal supports it. Full reference:
+[docs/api.md](docs/api.md#status-bar--lanes).
 
 ## State model
 
-Derived on every call from the event stream, PID liveness (guarded by
-process start-time — a reused PID is never signaled), and the deadline.
-Never stored, never stale. `settled` means the `agent_settled` event was
-seen — **success is `collect` with `suspect: false`**.
+Derived on every call from the event stream, PID liveness, and the
+deadline — never stored, never stale. `settled` means the `agent_settled`
+event was seen — **success is `collect` with `suspect: false`**.
 
 | State | Meaning |
 |---|---|
 | `starting` | spawned, no session header yet |
 | `running` | events flowing (`overdue: true` once past deadline) |
 | `settled` | `agent_settled` emitted (any stop reason — success is `collect` with `suspect: false`) |
-| `failed` | cause: `spawn` (synchronous, nothing ran) · `killed` (tombstoned) · `deadline` (leash fired, even parentless; a crash after the deadline is still `deadline`) · `crashed` (`.err` tail attached) |
+| `failed` | cause: `spawn` (nothing ran) · `killed` (tombstoned) · `deadline` (leash fired) · `crashed` (`.err` tail attached) |
 
 How lanes are spawned, what the manifest records, and why state is never
 stored: [Mechanics in docs/design.md](docs/design.md#mechanics).
