@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.4.0 — 2026-11-03
+
+Five changes, one theme: the TUI finally shows what the lanes are doing,
+and the `lanes` tool gained surgical targeting. LLM-facing surfaces stay
+call-compatible — v0.3.4 tool calls and manifests keep their meaning.
+
+- `kill` and `collect` accept `lane: [names]` to target a subset (untargeted
+  lanes untouched); `wait` accepts `waitMode: "any"` to return at the first
+  terminal lane; a parameter its action does not accept is rejected, never
+  silently ignored.
+- `collect` accepts `inlineMaxBytes` to inline each non-suspect artifact in
+  the text output (fence sized to the content's longest fence run, truncation
+  at the last complete character), and suspect lanes carry their cause —
+  `[SUSPECT: failed:deadline]` in the line, `suspectCause` in structured
+  output.
+- The statusbar footer no longer hides failures: an unreleased failed wave
+  keeps the footer (and its poll tick) alive — `lanes: 2 running ·
+  1 failed (deadline) · 1 settled`; a lane silent for ≥ 60s badges
+  `(1 idle 75s)`; a lane past its deadline badges `(1 overdue)`; a lone
+  running lane shows micro-telemetry — `lanes [survey/docs]: running
+  (turn 3 · bash · last 12s)` — from the new additive `inflightTool` on
+  status payloads.
+- `/lanes` is a three-form inspector: bare `/lanes` lists every wave (the
+  default workDir plus this session's tracked workDirs, `(prior session)`
+  tags, corrupt manifests listed with their error), `/lanes <wave>` prints
+  the table under a wall-clock and token/cost header, and
+  `/lanes <wave> <lane>` inspects a single lane — trace, artifact, or
+  failure — with clickable transcript/`.err` links (OSC 8, capability-gated
+  via pi's own probe). Two-level completion on wave then lane slugs.
+- A `collect` result in the TUI expands (ctrl+o / click) to markdown-render
+  each lane's artifact from an execute-time snapshot (16 kB per lane) —
+  honest after `release` deletes the files, zero model cost (`details`
+  never reaches the model; persisted in the session transcript).
+- Docs restructure: README is the overview layer; reference detail lives in
+  docs/api.md (new "Status bar & `/lanes`" section).
+
 ## 0.3.4 — 2026-11-03
 
 - pi 1.5.0 compatibility, typecheck-tier only. pi-ai 1.5.0 stopped re-exporting
