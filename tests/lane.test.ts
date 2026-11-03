@@ -7,7 +7,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { DEFAULT_LANE_TOOLS, assertBriefTools, assertLaneTools, assertSlugs, buildLaneArgs, laneEnv, missingBriefs, missingBriefsError, resolveExecutable, selectKillTargets, toolEntries } from "../src/lane.ts";
+import { DEFAULT_LANE_TOOLS, assertActionParams, assertBriefTools, assertLaneTools, assertSlugs, buildLaneArgs, laneEnv, missingBriefs, missingBriefsError, resolveExecutable, resolveLaneFilter, selectKillTargets, toolEntries } from "../src/lane.ts";
 import type { LaneParams } from "../src/lane.ts";
 import type { LaneRecord } from "../src/derive.ts";
 
@@ -198,6 +198,95 @@ function pidAliveFake(l: LaneRecord): boolean {
 	return l.processStart === "s" && l.pid !== null;
 }
 check("kill targets: only spawned, start-matching, unsettled lanes", targets.length === 1 && targets[0].name === "killme");
+check(
+	"kill targets: a tombstoned-but-alive lane stays eligible (asking again re-signals it)",
+	selectKillTargets([...lanes, fakeLane({ name: "tombstoned-alive", pid: 14, killedAt: new Date().toISOString() })], (l) => pidAliveFake(l), (l) => l.name === "settled").some((l) => l.name === "tombstoned-alive"),
+);
+check(
+	"kill targets: filter intersects eligibility (untargeted lanes never selected)",
+	(() => {
+		const t = selectKillTargets(lanes, (l) => pidAliveFake(l), (l) => l.name === "settled", new Set(["wrong-start", "settled"]));
+		return t.length === 0; // wrong-start fails liveness, settled is excluded — nothing eligible in the filter
+	})(),
+);
+check(
+	"kill targets: filter naming an eligible lane selects exactly it",
+	selectKillTargets(lanes, (l) => pidAliveFake(l), (l) => l.name === "settled", new Set(["killme", "never-spawned"])).length === 1,
+);
+
+// --- assertActionParams ----------------------------------------------------
+
+check(
+	"action params: lane accepted by kill and collect, rejected elsewhere naming both",
+	(() => {
+		assertActionParams("kill", { lane: ["a"] });
+		assertActionParams("collect", { lane: "a" });
+		return (
+			throwsWith(() => assertActionParams("status", { lane: ["a"] }), "applies only to: kill, collect") &&
+			throwsWith(() => assertActionParams("wait", { lane: ["a"] }), "'lane'") &&
+			throwsWith(() => assertActionParams("release", { lane: ["a"] }), "'release'")
+		);
+	})(),
+);
+check(
+	"action params: waitMode accepted by wait only; the error names wait",
+	(() => {
+		assertActionParams("wait", { waitMode: "any" });
+		assertActionParams("status", {});
+		return (
+			throwsWith(() => assertActionParams("status", { waitMode: "any" }), "applies only to: wait") &&
+			throwsWith(() => assertActionParams("kill", { waitMode: "all" }), "'kill'") &&
+			throwsWith(() => assertActionParams("collect", { waitMode: "any" }), "'waitMode'")
+		);
+	})(),
+);
+check(
+	"action params: kill with both lane and waitMode reports waitMode (one problem at a time)",
+	throwsWith(() => assertActionParams("kill", { lane: ["a"], waitMode: "any" }), "applies only to: wait"),
+);
+check(
+	"action params: waitMode value itself is validated on wait",
+	throwsWith(() => assertActionParams("wait", { waitMode: "bogus" }), `waitMode must be "all" or "any"`),
+);
+
+// --- resolveLaneFilter ------------------------------------------------------
+
+const fl = ["alpha", "beta", "gamma"].map((name) => fakeLane({ name }));
+check(
+	"lane filter: undefined means no filter (whole wave)",
+	resolveLaneFilter(fl, undefined) === undefined,
+);
+check(
+	"lane filter: subset in manifest order, same records",
+	(() => {
+		const sub = resolveLaneFilter(fl, ["gamma", "alpha"])!;
+		return sub.length === 2 && sub[0] === fl[0] && sub[1] === fl[2];
+	})(),
+);
+check(
+	"lane filter: a bare string is wrapped (model-shape coercion)",
+	(() => {
+		const sub = resolveLaneFilter(fl, "beta")!;
+		return sub.length === 1 && sub[0] === fl[1];
+	})(),
+);
+check("lane filter: duplicates name a lane once", resolveLaneFilter(fl, ["beta", "beta"])!.length === 1);
+check(
+	"lane filter: unknown slug error lists the wave's valid lanes",
+	throwsWith(() => resolveLaneFilter(fl, ["alpha", "nope"]), "unknown lane 'nope'") &&
+		throwsWith(() => resolveLaneFilter(fl, ["alpha", "nope"]), "valid lanes: alpha, beta, gamma"),
+);
+check(
+	"lane filter: a bare unknown string lists valid lanes too",
+	throwsWith(() => resolveLaneFilter(fl, "nope"), "valid lanes: alpha, beta, gamma"),
+);
+check("lane filter: empty array is rejected, never a silent no-op", throwsWith(() => resolveLaneFilter(fl, []), "at least one lane"));
+check(
+	"lane filter: non-array shapes are boundary errors, not raw TypeErrors",
+	throwsWith(() => resolveLaneFilter(fl, null as unknown as string[]), "must be a lane name or an array") &&
+		throwsWith(() => resolveLaneFilter(fl, { name: "alpha" } as unknown as string[]), "must be a lane name or an array") &&
+		throwsWith(() => resolveLaneFilter(fl, ["alpha", 5] as unknown as string[]), "must be a lane name or an array"),
+);
 
 // --- assertBriefTools ------------------------------------------------------
 

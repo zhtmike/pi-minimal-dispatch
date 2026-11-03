@@ -205,6 +205,57 @@ export function laneEnv(): NodeJS.ProcessEnv {
 }
 
 /** Lanes eligible for a kill signal: spawned, alive by the caller's check, not settled. */
-export function selectKillTargets(lanes: LaneRecord[], isAlive: (lane: LaneRecord) => boolean, isSettled: (lane: LaneRecord) => boolean): LaneRecord[] {
-	return lanes.filter((lane) => lane.pid !== null && lane.spawned && isAlive(lane) && !isSettled(lane));
+export function selectKillTargets(lanes: LaneRecord[], isAlive: (lane: LaneRecord) => boolean, isSettled: (lane: LaneRecord) => boolean, filter?: ReadonlySet<string>): LaneRecord[] {
+	return lanes.filter((lane) => lane.pid !== null && lane.spawned && isAlive(lane) && !isSettled(lane) && (filter === undefined || filter.has(lane.name)));
+}
+
+// --- lanes-tool parameter resolution ---------------------------------------
+
+export type LanesParamSet = {
+	lane?: unknown;
+	waitMode?: unknown;
+};
+
+/**
+ * Action×parameter compatibility at the tool boundary: a parameter an action
+ * does not accept is an error naming the actions that do — silent ignore is a
+ * silent fallback (`waitSec`'s legacy carve-out stays one). Enum values are
+ * checked here too: the host schema constrains well-behaved models, not bugs.
+ */
+export function assertActionParams(action: string, params: LanesParamSet): void {
+	if (params.lane !== undefined && action !== "kill" && action !== "collect") {
+		throw new Error(`parameter 'lane' is not accepted by action '${action}' — it applies only to: kill, collect`);
+	}
+	if (params.waitMode !== undefined) {
+		if (action !== "wait") {
+			throw new Error(`parameter 'waitMode' is not accepted by action '${action}' — it applies only to: wait`);
+		}
+		if (params.waitMode !== "all" && params.waitMode !== "any") {
+			throw new Error(`waitMode must be "all" or "any", got '${String(params.waitMode)}'`);
+		}
+	}
+}
+
+/**
+ * Resolve the `lane` filter to the wave's lanes it names (manifest order, same
+ * records — tombstones and artifact writes must hit the manifest's objects).
+ * undefined means no filter. A bare string is wrapped like pi's own edit tool
+ * coerces model-shape mistakes; an unknown slug is an error listing the valid
+ * lane names, after action×param compatibility (assertActionParams) ran first.
+ */
+export function resolveLaneFilter(lanes: LaneRecord[], requested: string[] | string | undefined): LaneRecord[] | undefined {
+	if (requested === undefined) return undefined;
+	const names = typeof requested === "string" ? [requested] : requested;
+	if (!Array.isArray(names) || names.some((n) => typeof n !== "string")) {
+		throw new Error(`lane filter must be a lane name or an array of lane names, got ${JSON.stringify(requested)}`);
+	}
+	if (names.length === 0) throw new Error("lane filter is empty — name at least one lane of the wave");
+	const valid = lanes.map((l) => l.name);
+	const known = new Set(valid);
+	const unknown = [...new Set(names)].filter((n) => !known.has(n));
+	if (unknown.length > 0) {
+		throw new Error(`unknown lane ${unknown.map((n) => `'${n}'`).join(", ")} in this wave — valid lanes: ${valid.join(", ")}`);
+	}
+	const wanted = new Set(names);
+	return lanes.filter((l) => wanted.has(l.name));
 }

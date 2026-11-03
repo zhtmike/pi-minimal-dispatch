@@ -89,8 +89,15 @@ fresh one after the dispatcher exited — sees the same truth.
 |---|---|---|---|
 | `wave` | string | — | Wave slug |
 | `action` | string? | `"status"` | `"status"` \| `"wait"` \| `"kill"` \| `"collect"` \| `"release"` |
+| `lane` | string[]? | — | `kill`/`collect` only: target exactly the named lanes. Unknown slug → error listing the wave's lanes; a bare string is wrapped (min 1 name) |
+| `waitMode` | `"all"\|"any"`? | `"all"` | `wait` only: `any` returns as soon as the first lane is terminal — the returned status table is unchanged |
 | `waitSec` | number? | `300` | `wait` only: max seconds to hold the call open (1–3600) |
 | `workDir` | string? | `workDir` config (`.pi/work`) | Directory holding the manifest |
+
+A parameter its action does not accept (`lane`, `waitMode`) is rejected with
+an error naming the actions that take it — never silently ignored.
+(`waitSec` outside `wait` keeps its legacy silent-ignore: a compatibility
+carve-out, not the pattern.)
 
 ### `status`
 
@@ -125,6 +132,14 @@ sleep-then-status polling, which guesses the duration and wakes late after a
 settle. `dispatch` still returns in under a second — blocking is always this
 explicit, bounded observation call, and the deadline leash needs no observer.
 
+`waitMode: "any"` changes only the wake condition: the call returns as soon
+as **one** lane of the wave is terminal (`settled` or `failed`) — the scout
+fan-out's early-action need; three answers need not wait for the fourth.
+The returned payload is the same full status table; with every lane already
+terminal it returns immediately, as `all` does. A `lane` filter is not
+offered on `wait`: first-settlement plus a bounded `waitSec` covers the
+early-action need.
+
 ### `kill`
 
 SIGTERM to each eligible lane's process group (never a
@@ -135,6 +150,19 @@ Waves owned by a **live foreign session** are refused (see `release` for the
 owner rules); killing your own wave or a provably-dead owner's runaway leash
 is unaffected.
 
+A `lane: [names]` filter scopes the signal: the target set is kill eligibility
+∩ the filter — untargeted lanes receive no signal and no tombstone, their
+records and files untouched, the manifest staying consistent for later
+`status`/`collect`/`release`. The grace-escalation loop watches only the
+current target set: an untargeted lane tombstoned by an *earlier* kill is
+never re-signaled or awaited here (a tombstoned lane named in the filter is
+still eligible — kill excludes settled lanes, not tombstoned ones — and
+asking again re-signals it). Naming only ineligible lanes (settled or dead)
+is not an error: the action reports `none (nothing eligible)` with per-lane
+state lines, exactly as an unfiltered kill with no eligible lanes does. The
+returned status table (text and `structuredContent.lanes`) is scoped to the
+filtered lanes; an unfiltered kill reports the whole wave.
+
 ### `collect`
 
 For each finished lane, writes the final assistant message (text blocks
@@ -144,6 +172,12 @@ failed, the message is empty, or the stop reason was not clean — treat such an
 artifact as **not done** and read the file only to judge it, don't paste it
 back into the conversation. A refused lane (still running / never spawned) is
 a **successful** tool result carrying a per-lane `reason`, not an error.
+
+A `lane: [names]` filter collects exactly those lanes — the kill-then-collect
+flow consumes the settled siblings without re-walking the killed lane's
+refusal or previously collected lanes. Partial collection composes with
+`release` unchanged: the release refusal names the unconsumed remainder until
+each spawned lane's artifact exists.
 
 ### `release`
 
@@ -179,6 +213,13 @@ loses nothing that reached the stream: salvage it by dispatching a cheap
 reader lane whose brief points at the events file, or grep it by hand.
 `collect`'s artifact is the **last** assistant message only — for a failed
 lane it is a fragment, not the findings; treat it as suspect.
+
+A slow lane is diagnosed from its tail, not its head:
+`bash tail -c 2000 <workDir>/<wave>-<name>.events.jsonl` —
+`tool_execution_start`/`_end` pair by `toolCallId` (an unmatched start is an
+in-flight tool), and `agent_settled` marks the end. There is no `peek`
+action by design; the general tools are the diagnosis surface. Wave
+discovery stays `ls <workDir>/*-manifest.json`.
 
 ## Configuration
 
