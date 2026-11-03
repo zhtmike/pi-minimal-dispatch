@@ -43,8 +43,11 @@ one deliberately small surface.
    the caller dispatches sequentially; the tool refuses to guess that for
    it.
 4. **Zero runtime dependencies.** Node builtins plus a small host-API
-   surface: `defineTool`, `Type`, `StringEnum` from `@earendil-works/pi-ai`;
-   `registerTool`, `registerCommand`, `on("session_start"|"session_shutdown")`,
+   surface: `defineTool` from the pi host, `Type` from `typebox` (pi's
+   documented import for schema definitions, mapped by the host loader),
+   and a local `stringEnum` helper where pi-ai's `StringEnum` lost its
+   TypeBox-inferable static type; `registerTool`, `registerCommand`,
+   `on("session_start"|"session_shutdown")`,
    and `ctx.ui.setStatus` from the pi host. Plain TypeScript, no build
    step (pi runs extensions via jiti).
 
