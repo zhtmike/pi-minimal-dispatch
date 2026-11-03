@@ -214,6 +214,7 @@ export function selectKillTargets(lanes: LaneRecord[], isAlive: (lane: LaneRecor
 export type LanesParamSet = {
 	lane?: unknown;
 	waitMode?: unknown;
+	inlineMaxBytes?: unknown;
 };
 
 /**
@@ -232,6 +233,14 @@ export function assertActionParams(action: string, params: LanesParamSet): void 
 		}
 		if (params.waitMode !== "all" && params.waitMode !== "any") {
 			throw new Error(`waitMode must be "all" or "any", got '${String(params.waitMode)}'`);
+		}
+	}
+	if (params.inlineMaxBytes !== undefined) {
+		if (action !== "collect") {
+			throw new Error(`parameter 'inlineMaxBytes' is not accepted by action '${action}' — it applies only to: collect`);
+		}
+		if (typeof params.inlineMaxBytes !== "number" || !Number.isInteger(params.inlineMaxBytes) || params.inlineMaxBytes < 0) {
+			throw new Error(`inlineMaxBytes must be an integer >= 0, got ${String(params.inlineMaxBytes)}`);
 		}
 	}
 }

@@ -4,7 +4,7 @@
  */
 
 import type { LaneStatus } from "../src/derive.ts";
-import { formatLaneLine, formatStatusBarSummary } from "../src/format.ts";
+import { formatCollectEntry, formatInlineArtifact, formatLaneLine, formatStatusBarSummary, suspectOf } from "../src/format.ts";
 
 let failures = 0;
 function check(name: string, cond: boolean, detail?: string) {
@@ -52,6 +52,105 @@ check(
 check(
 	"lane line: no model yet renders [default] — never an absent tag",
 	formatLaneLine(st({})).includes("lane [default] · running"),
+);
+
+// --- suspectOf (flag + first-applicable cause) ------------------------------
+
+check(
+	"suspect: failed beats empty and stop (first applicable), cause carries the lane's failure cause",
+	suspectOf(st({ state: "failed", cause: "deadline" }), "partial text").suspect === true &&
+		suspectOf(st({ state: "failed", cause: "killed" }), "partial text").cause === "failed:killed" &&
+		suspectOf(st({ state: "failed", cause: "crashed" }), "").cause === "failed:crashed",
+);
+check(
+	"suspect: empty final text when not failed",
+	suspectOf(st({ state: "settled" }), "").suspect === true && suspectOf(st({ state: "settled" }), "").cause === "empty",
+);
+check(
+	"suspect: non-clean stop reason when text is present",
+	suspectOf(st({ state: "settled", stopReason: "length" }), "answer").suspect === true &&
+		suspectOf(st({ state: "settled", stopReason: "length" }), "answer").cause === "stop:length",
+);
+check(
+	"suspect: clean lane is not suspect and carries no cause",
+	(() => {
+		const s = suspectOf(st({ state: "settled", stopReason: "stop" }), "answer");
+		return s.suspect === false && s.cause === undefined;
+	})(),
+);
+
+// --- formatCollectEntry (line + inline block) --------------------------------
+
+const okEntry = { name: "docs", artifact: "/w/w-docs.md", suspect: false, stopReason: "stop", content: "findings\n" };
+check(
+	"collect line: clean lane unchanged, no tag",
+	formatCollectEntry(okEntry, 0) === "  docs: /w/w-docs.md stop:stop",
+	formatCollectEntry(okEntry, 0),
+);
+check(
+	"collect line: suspect renders its cause after SUSPECT",
+	formatCollectEntry({ ...okEntry, suspect: true, suspectCause: "failed:deadline" }, 0) === "  docs: /w/w-docs.md [SUSPECT: failed:deadline] stop:stop",
+);
+check(
+	"collect line: refused lane renders its reason",
+	formatCollectEntry({ name: "docs", reason: "still running — refused" }, 1 << 20) === "  docs: still running — refused",
+);
+check(
+	"collect inline: suspect never inlines however small",
+	formatCollectEntry({ ...okEntry, suspect: true, suspectCause: "empty" }, 1 << 20) === "  docs: /w/w-docs.md [SUSPECT: empty] stop:stop",
+);
+check(
+	"collect inline: under budget the artifact content follows its line in a 3-fence",
+	formatCollectEntry(okEntry, 100) === "  docs: /w/w-docs.md stop:stop\n```\nfindings\n```",
+	JSON.stringify(formatCollectEntry(okEntry, 100)),
+);
+check(
+	"collect inline: content fence runs grow the fence (3-run → 4, 5-run → 6)",
+	(() => {
+		const three = formatInlineArtifact("a```b\n", "/w/a.md", 100);
+		const five = formatInlineArtifact("a`````b\n", "/w/a.md", 100);
+		return (
+			three.startsWith("````\n") && three.endsWith("\n````") &&
+			five.startsWith("``````\n") && five.endsWith("\n``````")
+		);
+	})(),
+);
+check(
+	"collect inline: over budget truncates with total bytes and the artifact path",
+	(() => {
+		const out = formatInlineArtifact("abcdefgh\n", "/w/w-docs.md", 4);
+		return out === "```\nabcd\n… [truncated, total 9 bytes — read /w/w-docs.md for the rest]\n```";
+	})(),
+	formatInlineArtifact("abcdefgh\n", "/w/w-docs.md", 4),
+);
+check(
+	"collect inline: truncation lands on the last complete multibyte character, never a split one",
+	(() => {
+		// 中 is 3 bytes; 7 bytes = 中中 + 1 byte of the third — the cut backs off to exactly two
+		const out = formatInlineArtifact("中中中中", "/w/a.md", 7);
+		return out.includes("\n中中\n… [truncated, total 12 bytes") && !out.includes("\uFFFD");
+	})(),
+	JSON.stringify(formatInlineArtifact("中中中中", "/w/a.md", 7)),
+);
+check(
+	"collect inline: exactly-budget content inlines whole without a marker",
+	(() => {
+		const out = formatInlineArtifact("中中", "/w/a.md", 6);
+		return out === "```\n中中\n```";
+	})(),
+);
+check(
+	"collect inline: a truncated body already ending in a newline takes the marker without a blank line",
+	(() => {
+		// 13 bytes total; the 4-byte budget cuts after "abc\n" — the third 中's lead byte backs the cut off
+		const out = formatInlineArtifact("abc\n中中中", "/w/a.md", 4);
+		return out === "```\nabc\n… [truncated, total 13 bytes — read /w/a.md for the rest]\n```";
+	})(),
+	JSON.stringify(formatInlineArtifact("abc\n中中中", "/w/a.md", 4)),
+);
+check(
+	"collect line: suspect without a cause renders the bare [SUSPECT] tag",
+	formatCollectEntry({ ...okEntry, suspect: true }, 0) === "  docs: /w/w-docs.md [SUSPECT] stop:stop",
 );
 
 console.log(failures === 0 ? "\nall passed" : `\n${failures} FAILED`);

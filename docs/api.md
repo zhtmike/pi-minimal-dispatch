@@ -92,12 +92,13 @@ fresh one after the dispatcher exited — sees the same truth.
 | `lane` | string[]? | — | `kill`/`collect` only: target exactly the named lanes. Unknown slug → error listing the wave's lanes; a bare string is wrapped (min 1 name) |
 | `waitMode` | `"all"\|"any"`? | `"all"` | `wait` only: `any` returns as soon as the first lane is terminal — the returned status table is unchanged |
 | `waitSec` | number? | `300` | `wait` only: max seconds to hold the call open (1–3600) |
+| `inlineMaxBytes` | integer? | `0` | `collect` only: inline each non-suspect lane's artifact content after its line when the artifact is ≤ N bytes (0 = never inline) |
 | `workDir` | string? | `workDir` config (`.pi/work`) | Directory holding the manifest |
 
-A parameter its action does not accept (`lane`, `waitMode`) is rejected with
-an error naming the actions that take it — never silently ignored.
-(`waitSec` outside `wait` keeps its legacy silent-ignore: a compatibility
-carve-out, not the pattern.)
+A parameter its action does not accept (`lane`, `waitMode`, `inlineMaxBytes`)
+is rejected with an error naming the actions that take it — never silently
+ignored. (`waitSec` outside `wait` keeps its legacy silent-ignore: a
+compatibility carve-out, not the pattern.)
 
 ### `status`
 
@@ -167,11 +168,27 @@ filtered lanes; an unfiltered kill reports the whole wave.
 
 For each finished lane, writes the final assistant message (text blocks
 concatenated) to `<wave>-<name>.md`. Entries carry
-`{ name, artifact, suspect, stopReason }`; `suspect: true` when the lane
-failed, the message is empty, or the stop reason was not clean — treat such an
-artifact as **not done** and read the file only to judge it, don't paste it
-back into the conversation. A refused lane (still running / never spawned) is
-a **successful** tool result carrying a per-lane `reason`, not an error.
+`{ name, artifact, suspect, suspectCause, stopReason }`; `suspect: true` when
+the lane failed, the message is empty, or the stop reason was not clean —
+`suspectCause` names the first applicable of `failed:<cause>`
+(killed/deadline/crashed), `empty`, `stop:<stopReason>`. The cause string is
+informational rendering, not a frozen vocabulary; the boolean is the stable
+flag. Treat a suspect artifact as **not done** and read the file only to judge
+it, don't paste it back into the conversation. A refused lane (still running /
+never spawned) is a **successful** tool result carrying a per-lane `reason`,
+not an error.
+
+`inlineMaxBytes: N` (default 0 — never inline) inlines a non-suspect lane's
+artifact content after its line in the text output when the artifact is ≤ N
+bytes, fenced with one more backtick than the content's longest fence run
+(`max(3, longest + 1)` — scout artifacts contain code blocks; a fixed fence
+would terminate early). Over N bytes, the content truncates at the last
+complete character within the first N bytes — never a split multibyte
+character — and ends with `… [truncated, total B bytes — read <artifactPath>
+for the rest]` inside the fence. Suspect artifacts never inline, whatever N
+is. Artifact content never enters `structuredContent` — it stays paths and
+flags; collection and the `release` consumption marker are unchanged whether
+or not anything inlined.
 
 A `lane: [names]` filter collects exactly those lanes — the kill-then-collect
 flow consumes the settled siblings without re-walking the killed lane's

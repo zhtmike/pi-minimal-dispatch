@@ -5,6 +5,69 @@
 
 import type { LaneStatus } from "./derive.ts";
 
+/**
+ * Suspect flag with its first-applicable cause: `failed:<cause>` (killed/
+ * deadline/crashed — spawn-failed lanes are refused before this), `empty`
+ * (no final assistant text), `stop:<stopReason>` (terminal message stop
+ * reason ≠ `stop`). The cause is informational rendering; the boolean is
+ * the stable flag.
+ */
+export function suspectOf(status: Pick<LaneStatus, "state" | "cause" | "stopReason">, finalText: string): { suspect: boolean; cause?: string } {
+	if (status.state === "failed") return { suspect: true, cause: `failed:${status.cause}` };
+	if (finalText === "") return { suspect: true, cause: "empty" };
+	if (status.stopReason !== "stop") return { suspect: true, cause: `stop:${status.stopReason}` };
+	return { suspect: false };
+}
+
+/** One collect line plus its optional inline artifact block. */
+export type CollectEntry = {
+	name: string;
+	artifact?: string;
+	reason?: string;
+	suspect?: boolean;
+	suspectCause?: string;
+	stopReason?: string;
+	/** Artifact content exactly as written to disk; present only for collected lanes. */
+	content?: string;
+};
+
+/**
+ * A suspect lane never inlines: its artifact is not done, and inlining would
+ * paste it into the dispatcher's context by default.
+ */
+export function formatCollectEntry(entry: CollectEntry, inlineMaxBytes: number): string {
+	const line =
+		`  ${entry.name}: ${entry.artifact ?? entry.reason}` +
+		`${entry.suspect ? ` [SUSPECT${entry.suspectCause !== undefined ? `: ${entry.suspectCause}` : ""}]` : ""}` +
+		`${entry.stopReason !== undefined ? ` stop:${entry.stopReason}` : ""}`;
+	if (inlineMaxBytes <= 0 || entry.suspect || entry.artifact === undefined || entry.content === undefined) return line;
+	return `${line}\n${formatInlineArtifact(entry.content, entry.artifact, inlineMaxBytes)}`;
+}
+
+/**
+ * Fenced artifact body for inlining: the fence is one backtick longer than the
+ * displayed content's longest fence run (a fixed fence would terminate early);
+ * over-budget content truncates at its last complete character within the
+ * first N bytes — never a split multibyte character.
+ */
+export function formatInlineArtifact(content: string, artifactPath: string, maxBytes: number): string {
+	const buf = Buffer.from(content, "utf8");
+	let body = content;
+	let marker = "";
+	if (buf.length > maxBytes) {
+		let cut = maxBytes;
+		while (cut > 0 && (buf[cut] & 0xc0) === 0x80) cut--; // back to a character boundary
+		body = buf.subarray(0, cut).toString("utf8");
+		marker = `${body.endsWith("\n") ? "" : "\n"}… [truncated, total ${buf.length} bytes — read ${artifactPath} for the rest]`;
+	}
+	// matchAll, not a spread of matches: a backtick-dense artifact overflows the spread at ~10^5 runs
+	let longest = 0;
+	for (const run of body.matchAll(/`+/g)) longest = Math.max(longest, run[0].length);
+	const fence = "`".repeat(Math.max(3, longest + 1));
+	const payload = body + marker;
+	return `${fence}\n${payload}${payload.endsWith("\n") ? "" : "\n"}${fence}`;
+}
+
 /** One status-table line per lane (two-space indent, err tail four-space indented). */
 export function formatLaneLine(s: LaneStatus): string {
 	// Short form: provider prefix dropped, thinking level labeled `think:` (a bare level word

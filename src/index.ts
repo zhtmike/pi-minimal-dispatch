@@ -33,7 +33,7 @@ import {
 	waveTerminal,
 	writeManifestAtomic,
 } from "./derive.ts";
-import { formatStatusBarSummary, formatWaveStatus } from "./format.ts";
+import { formatCollectEntry, formatStatusBarSummary, formatWaveStatus, suspectOf } from "./format.ts";
 import { type LaneParams, assertActionParams, assertBriefTools, assertLaneTools, assertSlugs, buildLaneArgs, laneEnv, missingBriefs, missingBriefsError, resolveExecutable, resolveLaneFilter, selectKillTargets } from "./lane.ts";
 
 /**
@@ -243,7 +243,8 @@ const lanesTool = defineTool({
 		"action=collect: write each finished lane's final assistant " +
 		"message to <wave>-<name>.md (suspect-flagged on failure/empty/non-clean stopReason); a refusal " +
 		"(running / never spawned) is a successful result with a per-lane reason; pass lane:[names] to collect " +
-		"only those lanes. Stateless: reads the manifest " +
+		"only those lanes; pass inlineMaxBytes to inline each non-suspect lane's artifact content in the output " +
+		"when it fits within N bytes (suspect artifacts never inline). Stateless: reads the manifest " +
 		"fresh — works across sessions, including after the dispatcher exited. A collected lane is a path plus " +
 		"`suspect`; `suspect: true` means the artifact is not done — read the file only to judge it, do not paste " +
 		"it back. action=release: delete exactly a settled wave's own files — the manifest-enumerated " +
@@ -266,6 +267,12 @@ const lanesTool = defineTool({
 			stringEnum(["all", "any"], { description: "wait action only: 'any' returns as soon as the first lane is terminal (settled/failed) instead of all — the returned status table is unchanged" }),
 		),
 		waitSec: Type.Optional(Type.Number({ description: "wait action only: max seconds to hold the call open (default 300; 1–3600)", minimum: 1, maximum: 3600 })),
+		inlineMaxBytes: Type.Optional(
+			Type.Integer({
+				minimum: 0,
+				description: "collect action only: inline each non-suspect lane's artifact content after its line when the artifact is ≤ N bytes (default 0 — never inline); over budget it truncates at the last complete character and names the artifact path for the rest",
+			}),
+		),
 		workDir: Type.Optional(Type.String({ description: "Directory holding the manifest (config default: .pi/work)" })),
 	}),
 
@@ -390,7 +397,9 @@ const lanesTool = defineTool({
 
 		// action === "collect"
 		const collectScope = resolveLaneFilter(manifest.lanes, params.lane) ?? manifest.lanes;
-		const results: Array<{ name: string; artifact?: string; suspect?: boolean; reason?: string; stopReason?: string }> = [];
+		const inlineMaxBytes = params.inlineMaxBytes ?? 0;
+		const results: Array<{ name: string; artifact?: string; suspect?: boolean; suspectCause?: string; reason?: string; stopReason?: string }> = [];
+		const contents = new Map<string, string>(); // display-only: artifact content never enters structuredContent
 		for (const lane of collectScope) {
 			const status = deriveLane(lane, Date.now());
 			if (status.cause === "spawn") {
@@ -402,14 +411,14 @@ const lanesTool = defineTool({
 				continue;
 			}
 			const text = finalAssistantText(parseEvents(lane.eventsPath));
-			const suspect = status.state === "failed" || text === "" || status.stopReason !== "stop";
+			const { suspect, cause } = suspectOf(status, text);
 			const artifact = artifactPathFor(manifest, lane);
-			fs.writeFileSync(artifact, text.endsWith("\n") || text === "" ? text : text + "\n");
-			results.push({ name: lane.name, artifact, suspect, stopReason: status.stopReason });
+			const written = text.endsWith("\n") || text === "" ? text : text + "\n";
+			fs.writeFileSync(artifact, written);
+			results.push({ name: lane.name, artifact, suspect, suspectCause: cause, stopReason: status.stopReason });
+			contents.set(lane.name, written);
 		}
-		const text = results
-			.map((r) => `  ${r.name}: ${r.artifact ?? r.reason}${r.suspect ? " [SUSPECT]" : ""}${r.stopReason !== undefined ? ` stop:${r.stopReason}` : ""}`)
-			.join("\n");
+		const text = results.map((r) => formatCollectEntry({ ...r, content: contents.get(r.name) }, inlineMaxBytes)).join("\n");
 		return {
 			content: [{ type: "text", text: `collect wave '${params.wave}':\n${text}` }],
 			structuredContent: { wave: params.wave, results },
