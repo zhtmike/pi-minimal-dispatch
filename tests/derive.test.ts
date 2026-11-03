@@ -298,6 +298,88 @@ writeWEvents([JSON.stringify({ type: "session", id: "s" })]);
 child.kill("SIGKILL");
 fs.rmSync(workDir2, { recursive: true, force: true });
 
+// --- waitForTerminal mode: any (first-terminal wake) ------------------------
+
+const workDir3 = fs.mkdtempSync(path.join(os.tmpdir(), "pi-minimal-dispatch-any-"));
+const slowChild = spawn("sh", ["-c", "sleep 30"]); // real liveness for the still-running lane
+const mkAnyLane = (name: string, pid: number): LaneRecord => ({
+	name,
+	briefPath: "/dev/null",
+	eventsPath: path.join(workDir3, `any-${name}.events.jsonl`),
+	errPath: path.join(workDir3, `any-${name}.err`),
+	pid,
+	processStart: psLstart(pid),
+	startedAt: new Date().toISOString(),
+	deadlineSec: 900,
+	spawned: true,
+});
+const fastLane = mkAnyLane("fast", process.pid);
+const slowLane = mkAnyLane("slow", slowChild.pid!);
+const anyManifest: Manifest = { version: 1, wave: "any", workDir: workDir3, createdAt: fastLane.startedAt, lanes: [fastLane, slowLane] };
+const writeAnyEvents = (lane: LaneRecord, lines: object[]) => fs.writeFileSync(lane.eventsPath, lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
+const sessionHeader = { type: "session", id: "s" };
+const writeAnyManifest = () => writeManifestAtomic(anyManifest);
+const runningEvents = [sessionHeader, { type: "turn_start" }];
+fs.writeFileSync(fastLane.errPath, "");
+fs.writeFileSync(slowLane.errPath, "");
+
+// wait-any: the first terminal lane wakes the caller while the sibling still runs.
+writeAnyEvents(fastLane, runningEvents);
+writeAnyEvents(slowLane, runningEvents);
+writeAnyManifest();
+{
+	const timer = setTimeout(() => writeAnyEvents(fastLane, [sessionHeader, { type: "agent_settled" }]), 150);
+	const t0 = Date.now();
+	const statuses = await waitForTerminal(workDir3, "any", 10000, 50, undefined, "any");
+	clearTimeout(timer);
+	const elapsed = Date.now() - t0;
+	check(
+		"wait-any: wakes at the first terminal lane with the full status table",
+		statuses.length === 2 &&
+			statuses.find((s) => s.name === "fast")!.state === "settled" &&
+			statuses.find((s) => s.name === "slow")!.state === "running" &&
+			elapsed >= 100 && elapsed < 2500,
+		JSON.stringify(statuses.map((s) => `${s.name}:${s.state}`)) + ` elapsed ${Date.now() - t0}ms`,
+	);
+}
+
+// wait-all on the same staging must NOT wake at the first terminal lane.
+writeAnyEvents(fastLane, runningEvents);
+writeAnyManifest();
+{
+	const timer = setTimeout(() => writeAnyEvents(fastLane, [sessionHeader, { type: "agent_settled" }]), 150);
+	const t0 = Date.now();
+	const statuses = await waitForTerminal(workDir3, "any", 400, 50, undefined, "all");
+	clearTimeout(timer);
+	const elapsed = Date.now() - t0;
+	check(
+		"wait-all: first-terminal does not wake all-mode (timeout returns the table)",
+		elapsed >= 380 &&
+			elapsed < 2500 &&
+			statuses.find((s) => s.name === "fast")!.state === "settled" &&
+			statuses.find((s) => s.name === "slow")!.state === "running",
+		`elapsed ${elapsed}ms`,
+	);
+}
+
+// wait-any: every lane already terminal returns immediately, as wait-all does.
+writeAnyEvents(fastLane, [sessionHeader, { type: "agent_settled" }]);
+writeAnyEvents(slowLane, [sessionHeader, { type: "agent_settled" }]);
+writeAnyManifest();
+{
+	const t0 = Date.now();
+	const statuses = await waitForTerminal(workDir3, "any", 5000, 200, undefined, "any");
+	const elapsed = Date.now() - t0;
+	check(
+		"wait-any: all-terminal from start returns immediately",
+		statuses.every((s) => s.state === "settled") && elapsed < 1500,
+		`elapsed ${elapsed}ms`,
+	);
+}
+
+slowChild.kill("SIGKILL");
+fs.rmSync(workDir3, { recursive: true, force: true });
+
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(failures === 0 ? "\nall passed" : `\n${failures} FAILED`);
 process.exitCode = failures === 0 ? 0 : 1;

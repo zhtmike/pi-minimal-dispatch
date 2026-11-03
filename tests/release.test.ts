@@ -168,6 +168,25 @@ check(
 	unconsumedTranscripts(manifest({ lanes: [lane({ name: "ns", eventsPath: nEvents })] })).length === 0,
 );
 
+// Partial collection (the `lane` filter's seam with release): a subset's
+// artifacts exist, the remainder is still named — release composes unchanged.
+const p1Events = path.join(tmp, "w-p1.events.jsonl");
+const p2Events = path.join(tmp, "w-p2.events.jsonl");
+const partialWave = manifest({
+	lanes: [
+		lane({ name: "p1", spawned: true, spawnError: undefined, eventsPath: p1Events }),
+		lane({ name: "p2", spawned: true, spawnError: undefined, eventsPath: p2Events }),
+	],
+});
+fs.writeFileSync(p1Events, "fixture\n");
+fs.writeFileSync(p2Events, "fixture\n");
+fs.writeFileSync(path.join(tmp, "w-p1.md"), "collected\n"); // lane-filtered collect wrote p1 only
+check(
+	"unconsumed: subset collect names exactly the unconsumed remainder",
+	JSON.stringify(unconsumedTranscripts(partialWave)) === JSON.stringify(["p2"]),
+	JSON.stringify(unconsumedTranscripts(partialWave)),
+);
+
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(failures === 0 ? "\nall passed" : `\n${failures} FAILED`);
 process.exitCode = failures === 0 ? 0 : 1;

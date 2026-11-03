@@ -34,7 +34,7 @@ import {
 	writeManifestAtomic,
 } from "./derive.ts";
 import { formatStatusBarSummary, formatWaveStatus } from "./format.ts";
-import { type LaneParams, assertBriefTools, assertLaneTools, assertSlugs, buildLaneArgs, laneEnv, missingBriefs, missingBriefsError, resolveExecutable, selectKillTargets } from "./lane.ts";
+import { type LaneParams, assertActionParams, assertBriefTools, assertLaneTools, assertSlugs, buildLaneArgs, laneEnv, missingBriefs, missingBriefsError, resolveExecutable, resolveLaneFilter, selectKillTargets } from "./lane.ts";
 
 /**
  * `Type.Unsafe` keeps the literal-union typing that `defineTool`'s TypeBox inference reads;
@@ -234,23 +234,37 @@ const lanesTool = defineTool({
 		"(starting/running/settled/failed + cause spawn|killed|deadline|crashed), turns, run-total usage, " +
 		"model + thinking level (actual, from the event stream — message_start's model once generation begins, last assistant message once it answers; pinned value before that; [default] in status lines for a pre-generation lane that pins nothing), " +
 		"stopReason, last-event age, .err tail for crashed lanes. action=wait: hold this call open, " +
-		"re-deriving at the pollMs cadence, until every lane is settled/failed or waitSec (default 300, " +
+		"re-deriving at the pollMs cadence, until every lane is settled/failed (or the first one, with " +
+		"waitMode:'any') or waitSec (default 300, " +
 		"max 3600) elapses — then return the status table; replaces blind sleep-then-status polling. " +
 		"action=kill: SIGTERM the lane process group " +
-		"(SIGKILL after the configured grace), start-time guarded; refuses waves owned by a live foreign session. " +
+		"(SIGKILL after the configured grace), start-time guarded; refuses waves owned by a live foreign session; " +
+		"pass lane:[names] to signal only those lanes — untargeted lanes are untouched. " +
 		"action=collect: write each finished lane's final assistant " +
 		"message to <wave>-<name>.md (suspect-flagged on failure/empty/non-clean stopReason); a refusal " +
-		"(running / never spawned) is a successful result with a per-lane reason. Stateless: reads the manifest " +
+		"(running / never spawned) is a successful result with a per-lane reason; pass lane:[names] to collect " +
+		"only those lanes. Stateless: reads the manifest " +
 		"fresh — works across sessions, including after the dispatcher exited. A collected lane is a path plus " +
 		"`suspect`; `suspect: true` means the artifact is not done — read the file only to judge it, do not paste " +
 		"it back. action=release: delete exactly a settled wave's own files — the manifest-enumerated " +
 		"briefs/events/err, collect artifacts, and the manifest; refuses unsettled, foreign-owned, and " +
 		"unconsumed waves (a spawned lane's events file present without its collect artifact — collect " +
 		"first; a human may delete the files by hand). " +
-		"Discover waves: ls <workDir>/*-manifest.json.",
+		"Discover waves: ls <workDir>/*-manifest.json. " +
+		"A slow lane is diagnosed from its tail: bash tail -c 2000 <wave>-<name>.events.jsonl — " +
+		"tool_execution_start/_end pair by toolCallId (an unmatched start is an in-flight tool); agent_settled marks the end.",
 	parameters: Type.Object({
 		wave: Type.String({ description: "Wave slug" }),
 		action: Type.Optional(stringEnum(["status", "wait", "kill", "collect", "release"])),
+		lane: Type.Optional(
+			Type.Array(Type.String(), {
+				minItems: 1,
+				description: "Target only the named lanes within the wave — kill and collect only (other actions reject it); a bare string is wrapped, an unknown slug is an error listing the wave's lanes",
+			}),
+		),
+		waitMode: Type.Optional(
+			stringEnum(["all", "any"], { description: "wait action only: 'any' returns as soon as the first lane is terminal (settled/failed) instead of all — the returned status table is unchanged" }),
+		),
 		waitSec: Type.Optional(Type.Number({ description: "wait action only: max seconds to hold the call open (default 300; 1–3600)", minimum: 1, maximum: 3600 })),
 		workDir: Type.Optional(Type.String({ description: "Directory holding the manifest (config default: .pi/work)" })),
 	}),
@@ -259,6 +273,9 @@ const lanesTool = defineTool({
 		const cfg = loadConfig();
 		const workDir = path.resolve(params.workDir ?? cfg.workDir);
 		const action = params.action ?? "status";
+		// Compatibility before slug validation: a misplaced parameter is the caller's
+		// first fix; the manifest is only needed to check the slugs against.
+		assertActionParams(action, params);
 		const manifest = readManifest(workDir, params.wave);
 		trackWave(params.wave, workDir);
 
@@ -274,7 +291,7 @@ const lanesTool = defineTool({
 
 		if (action === "wait") {
 			// A timeout is a normal status result with running lanes, never an error.
-			const statuses = await waitForTerminal(workDir, params.wave, (params.waitSec ?? 300) * 1000, cfg.pollMs, signal);
+			const statuses = await waitForTerminal(workDir, params.wave, (params.waitSec ?? 300) * 1000, cfg.pollMs, signal, params.waitMode === "any" ? "any" : "all");
 			return {
 				content: [{ type: "text", text: formatWaveStatus(params.wave, statuses) }],
 				structuredContent: { wave: params.wave, lanes: statuses },
@@ -283,15 +300,18 @@ const lanesTool = defineTool({
 		}
 
 		if (action === "kill") {
+			const filterLanes = resolveLaneFilter(manifest.lanes, params.lane);
+			const filterNames = filterLanes === undefined ? undefined : new Set(filterLanes.map((l) => l.name));
 			const guard = ownerGuard(manifest.owner, ctx.sessionManager.getSessionId(), hostname(), params.wave);
 			if (!guard.ok) throw new Error(guard.reason);
 			const killed: string[] = [];
+			const targets = selectKillTargets(
+				manifest.lanes,
+				(l) => pidAlive(l.pid!, l.processStart), // never signal a reused PID
+				(l) => deriveLane(l, Date.now()).state === "settled",
+				filterNames,
+			);
 			try {
-				const targets = selectKillTargets(
-					manifest.lanes,
-					(l) => pidAlive(l.pid!, l.processStart), // never signal a reused PID
-					(l) => deriveLane(l, Date.now()).state === "settled",
-				);
 				for (const lane of targets) {
 					try {
 						process.kill(-lane.pid!, "SIGTERM"); // negative = process group (timeout + pi)
@@ -311,9 +331,11 @@ const lanesTool = defineTool({
 				while (Date.now() < deadline) {
 					if (signal?.aborted) break;
 					await new Promise((r) => setTimeout(r, 200));
-					const survivors = manifest.lanes.filter(
+					// The grace loop watches only this call's target set: an untargeted lane
+					// tombstoned earlier dies on its own schedule, unwatched here.
+					const survivors = targets.filter(
 						(l) => l.killedAt !== undefined && l.pid !== null && pidAlive(l.pid, l.processStart),
-					);
+						);
 					if (survivors.length === 0) break;
 					if (Date.now() + 200 >= deadline) {
 						for (const l of survivors) {
@@ -325,7 +347,7 @@ const lanesTool = defineTool({
 				}
 				writeManifestAtomic(manifest);
 			}
-			const statuses = manifest.lanes.map((l) => deriveLane(l, Date.now()));
+			const statuses = (filterLanes ?? manifest.lanes).map((l) => deriveLane(l, Date.now()));
 			return {
 				content: [
 					{
@@ -367,8 +389,9 @@ const lanesTool = defineTool({
 		}
 
 		// action === "collect"
+		const collectScope = resolveLaneFilter(manifest.lanes, params.lane) ?? manifest.lanes;
 		const results: Array<{ name: string; artifact?: string; suspect?: boolean; reason?: string; stopReason?: string }> = [];
-		for (const lane of manifest.lanes) {
+		for (const lane of collectScope) {
 			const status = deriveLane(lane, Date.now());
 			if (status.cause === "spawn") {
 				results.push({ name: lane.name, reason: "never spawned — refused" });

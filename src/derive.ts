@@ -304,10 +304,13 @@ export function waveTerminal(lanes: LaneRecord[], now: number): boolean {
 	});
 }
 
+export type WaitMode = "all" | "any";
+
 /**
- * Poll a wave until every lane is terminal, `waitMs` elapses, or the signal
- * aborts; returns the final statuses. Re-reads the manifest on every poll —
- * the same derived truth as the status action, held open.
+ * Poll a wave until its wake condition holds — every lane terminal (`all`), or
+ * the first one (`any`) — `waitMs` elapses, or the signal aborts; returns the
+ * final statuses. Re-reads the manifest on every poll — the same derived
+ * truth as the status action, held open.
  */
 export async function waitForTerminal(
 	workDir: string,
@@ -315,12 +318,17 @@ export async function waitForTerminal(
 	waitMs: number,
 	pollMs: number,
 	signal?: AbortSignal,
+	mode: WaitMode = "all",
 ): Promise<LaneStatus[]> {
 	const deadline = Date.now() + waitMs;
 	for (;;) {
 		const lanes = readManifest(workDir, wave).lanes;
 		const now = Date.now();
-		if (waveTerminal(lanes, now) || now >= deadline || signal?.aborted) {
+		const woken =
+			mode === "any"
+				? lanes.some((lane) => ["settled", "failed"].includes(deriveLane(lane, now).state))
+				: waveTerminal(lanes, now);
+		if (woken || now >= deadline || signal?.aborted) {
 			return lanes.map((lane) => deriveLane(lane, now));
 		}
 		// The sleep races the abort so a cancelled call returns at once, not at the next poll.
