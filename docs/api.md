@@ -191,6 +191,15 @@ is. Artifact content never enters `structuredContent` — it stays paths and
 flags; collection and the `release` consumption marker are unchanged whether
 or not anything inlined.
 
+In the TUI, a collect result is expandable (ctrl+o / click): the collapsed
+block shows the collect text as-is; the expanded block markdown-renders
+each collected lane's artifact from a snapshot taken at collect time,
+capped at 16 kB per lane — the block stays honest after `release` deletes
+the artifacts, and no file I/O runs in the render path. The snapshot rides
+the result's `details` channel: it never reaches the model but is persisted
+into the session transcript, and repeated `collect` calls repeat the
+snapshot.
+
 A `lane: [names]` filter collects exactly those lanes — the kill-then-collect
 flow consumes the settled siblings without re-walking the killed lane's
 refusal or previously collected lanes. Partial collection composes with
@@ -238,6 +247,66 @@ A slow lane is diagnosed from its tail, not its head:
 in-flight tool), and `agent_settled` marks the end. There is no `peek`
 action by design; the general tools are the diagnosis surface. Wave
 discovery stays `ls <workDir>/*-manifest.json`.
+
+## Status bar & `/lanes`
+
+The statusbar footer and the `/lanes` command are TUI conveniences over
+the same derived state the `lanes` tool reports; `--print`/`--mode json`
+sessions see status through the tool alone.
+
+### Status bar
+
+While any tracked lane runs — or has failed and the wave is not yet
+released — the footer shows one line. Segments sit in a fixed order,
+empty ones dropped: `[telemetry | running-count] · [idle/overdue badge] ·
+[failed badge] · [settled/failed counts]`.
+
+- A `running` lane silent for ≥ 60s badges `(N idle Ms)` with its honest
+  last-event age (a lane past its deadline badges overdue instead) — a
+  signal, not a verdict: a lane legitimately inside a long `bash` run
+  trips it too.
+- A lane past its deadline badges `(N overdue)` — the kill-and-redispatch
+  discipline still decides.
+- An unreleased failure keeps the footer (and its poll tick) alive until
+  the wave is released; a fully settled wave clears it.
+- When exactly one lane is running, the count becomes micro-telemetry:
+  `lanes [survey/docs]: running (turn 3 · bash · last 12s)` — the
+  in-flight tool from the latest unmatched `tool_execution_start`; start
+  events carry no timestamp, so no tool age is shown.
+
+### `/lanes`
+
+Three forms:
+
+- `/lanes` — every wave with a manifest in the default workDir plus this
+  session's tracked workDirs: lane count, aggregate state, a
+  `(prior session)` tag on waves from a dead or unidentifiable
+  dispatcher, corrupt manifests listed with their error. Ends with the
+  grammar line.
+- `/lanes <wave>` — the per-lane table under a wave header (wall clock
+  since dispatch, summed tokens and cost).
+- `/lanes <wave> <lane>` — single-lane inspector by state: settled lanes
+  show metadata, a recent tool trace, and the artifact (or `not yet
+  collected`); running lanes show the live trace — tool names with
+  one-line 80-char argument snippets, the open tool marked in flight,
+  the last assistant text; failed lanes show cause, `.err` tail, and
+  transcript/err paths.
+
+Failed lanes in the wave table also list their transcript and `.err`
+paths, clickable when the terminal proves capable (pi's own OSC 8 gate —
+`PI_HYPERLINKS` overrides; plain absolute/`~` paths otherwise). A click
+opens the absolute `file://` target — it works exactly where the
+terminal's machine can reach the file, so under SSH+tmux the paths are
+for copy-paste. Completion is two-level: wave slugs first, then lane
+slugs of the selected wave (type letters to filter, Tab to apply). Each
+table line tags the lane with its model — short id (provider prefix
+dropped), `think:<level>` appended when set; `[default]` for a no-pin
+lane that hasn't started generating.
+
+Worked example: `dispatch` a two-lane scout wave; bare `/lanes` lists
+`scouts — 2 lanes · 2 running`; once the footer shows them settled,
+`/lanes scouts` confirms both lanes and `/lanes scouts docs` reads the
+artifact in the TUI — zero model tokens.
 
 ## Configuration
 
