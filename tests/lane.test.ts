@@ -7,7 +7,23 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { DEFAULT_LANE_TOOLS, assertActionParams, assertBriefTools, assertLaneTools, assertSlugs, buildLaneArgs, laneEnv, missingBriefs, missingBriefsError, resolveExecutable, resolveLaneFilter, selectKillTargets, toolEntries } from "../src/lane.ts";
+import {
+	assertActionParams,
+	assertBriefTools,
+	assertLaneTools,
+	assertSlugs,
+	buildLaneArgs,
+	DEFAULT_LANE_TOOLS,
+	laneEnv,
+	lanesCompletions,
+	missingBriefs,
+	missingBriefsError,
+	parseLanesArgs,
+	resolveExecutable,
+	resolveLaneFilter,
+	selectKillTargets,
+	toolEntries,
+} from "../src/lane.ts";
 import type { LaneParams } from "../src/lane.ts";
 import type { LaneRecord } from "../src/derive.ts";
 
@@ -354,5 +370,52 @@ check(
 );
 
 fs.rmSync(tmp, { recursive: true, force: true });
+
+// --- /lanes parsing + two-level completion -----------------------------------
+
+check(
+	"parseLanesArgs: empty, wave only, wave+lane; extra whitespace collapses",
+	(() => {
+		const e = parseLanesArgs("");
+		const w = parseLanesArgs("  survey  ");
+		const wl = parseLanesArgs(" survey docs ");
+		return e.wave === undefined && e.lane === undefined && w.wave === "survey" && w.lane === undefined && wl.wave === "survey" && wl.lane === "docs";
+	})(),
+);
+check(
+	"parseLanesArgs: three arguments fail loudly",
+	(() => {
+		try {
+			parseLanesArgs("a b c");
+			return false;
+		} catch (e: any) {
+			return e.message.includes("at most two arguments");
+		}
+	})(),
+);
+check(
+	"completions level 1: wave slugs filtered, deduped, sorted",
+	(() => {
+		const out = lanesCompletions("al", ["beta", "alpha", "alpha"], () => []);
+		return JSON.stringify(out) === JSON.stringify([{ value: "alpha", label: "alpha" }]);
+	})(),
+);
+check(
+	"completions level 2: a trailing space completes lane names with full-replacement values",
+	(() => {
+		const out = lanesCompletions("alpha ", ["alpha"], (w) => (w === "alpha" ? ["docs", "search"] : []));
+		return JSON.stringify(out) === JSON.stringify([
+			{ value: "alpha docs", label: "docs" },
+			{ value: "alpha search", label: "search" },
+		]);
+	})(),
+);
+check(
+	"completions level 2: prefix filters lanes; three tokens and unknown waves complete nothing",
+	lanesCompletions("alpha d", ["alpha"], (w) => (w === "alpha" ? ["docs", "search"] : [])).length === 1 &&
+		lanesCompletions("a b c", ["alpha"], () => ["x"]).length === 0 &&
+		lanesCompletions("nope ", ["alpha"], () => []).length === 0,
+);
+
 console.log(failures === 0 ? "\nall passed" : `\n${failures} FAILED`);
 process.exitCode = failures === 0 ? 0 : 1;

@@ -147,21 +147,35 @@ one lane is running, the count becomes micro-telemetry —
 in-flight tool from the latest unmatched `tool_execution_start`;
 `tool_execution_start` carries no timestamp, so no tool age is shown.
 
-`/lanes [<wave>]` prints the full status table for waves seen this
-session (an untracked wave name is resolved from the default workDir)
-and completes wave names. Failed lanes also list their transcript and
-`.err` paths, clickable when the terminal proves capable (pi's own
-OSC 8 gate — `PI_HYPERLINKS` overrides; plain absolute/`~` paths
-otherwise). A click opens the absolute `file://` target — it works
-exactly where the terminal's machine can reach the file, so under
-SSH+tmux the paths are for copy-paste. Each line tags the lane
+`/lanes` has three forms. Bare `/lanes` lists every wave with a
+manifest in the default workDir plus this session's tracked workDirs —
+lane count, aggregate state, a `(prior session)` tag on waves from a
+dead or unidentifiable dispatcher, corrupt manifests listed with their
+error — and ends with the grammar line. `/lanes <wave>` prints the
+per-lane table under a wave header (wall clock since dispatch, summed
+tokens and cost). `/lanes <wave> <lane>` inspects one lane: settled
+lanes show metadata, a recent tool trace, and the artifact (or `not
+yet collected`); running lanes show the live trace — tool names with
+one-line, 80-char argument snippets, the open tool marked in flight,
+the last assistant text; failed lanes show cause, `.err` tail, and
+transcript/err paths. Failed lanes in the wave table also list their
+transcript and `.err` paths, clickable when the terminal proves
+capable (pi's own OSC 8 gate — `PI_HYPERLINKS` overrides; plain
+absolute/`~` paths otherwise). A click opens the absolute `file://`
+target — it works exactly where the terminal's machine can reach the
+file, so under SSH+tmux the paths are for copy-paste. Completion is
+two-level: wave slugs first, then lane slugs of the selected wave
+(type letters to filter, Tab to apply). Each table line tags the lane
 with its model —
 short id (provider prefix dropped), `think:<level>` appended when set —
 the actual model from the event stream once generation begins, the
 pinned value before that, `[default]` for a no-pin lane that hasn't
-started. Both are TUI conveniences over the same derived state the
-`lanes` tool reports; `--print`/`--mode json` sessions see status
-through the tool alone.
+started. Walkthrough: `dispatch` a two-lane scout wave; bare `/lanes`
+lists `scouts — 2 lanes · 2 running`; once the footer shows them
+settled, `/lanes scouts` confirms both lanes and `/lanes scouts docs`
+reads the artifact in the TUI — zero model tokens. Both surfaces are
+TUI conveniences over the same derived state the `lanes` tool reports;
+`--print`/`--mode json` sessions see status through the tool alone.
 
 ## State model
 

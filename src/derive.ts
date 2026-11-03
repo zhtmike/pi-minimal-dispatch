@@ -234,7 +234,7 @@ function errTailFor(lane: LaneRecord): string | undefined {
 }
 
 /** Derive a lane's status from its events file, PID liveness, and manifest facts. Never stored. */
-export function deriveLane(lane: LaneRecord, now: number): LaneStatus {
+export function deriveLane(lane: LaneRecord, now: number, events: LaneEvent[] = parseEvents(lane.eventsPath)): LaneStatus {
 	// Precedence mirrors pi: an explicit --thinking beats the model's `:thinking` suffix, which
 	// splits only on the last colon and a valid level word (ids like `qwen3-coder:exacto` keep it).
 	const pinned = lane.model?.match(/^(.+):(off|minimal|low|medium|high|xhigh|max)$/);
@@ -250,7 +250,6 @@ export function deriveLane(lane: LaneRecord, now: number): LaneStatus {
 
 	if (!lane.spawned) return { ...base, cause: "spawn", spawnError: lane.spawnError };
 
-	const events = parseEvents(lane.eventsPath);
 	// Open tool calls keyed by id in start order; the last one is the tool running now.
 	const openTools = new Map<string, string>();
 	for (const e of events) {
@@ -370,6 +369,106 @@ export function finalAssistantText(events: LaneEvent[]): string {
 		if (message !== null) text = messageText(message);
 	}
 	return text;
+}
+
+// --- TUI-owned derivation (never wired to the lanes tool) -------------------
+
+/** One tool call in a lane's trace; `inflight` marks a start with no matching end yet. */
+export type TraceTool = {
+	name: string;
+	/** Raw `args` object as the event carried it — presentation snippets it later. */
+	args: unknown;
+	durationMs?: number;
+	inflight?: boolean;
+};
+
+/** Recent-activity summary over a lane's parsed events — the inspector's core. */
+export type TraceSummary = {
+	/** Most recent tool calls, in execution order (a matched start/end is one entry). */
+	tools: TraceTool[];
+	/** Final assistant text so far — the last assistant message_end's text blocks. */
+	lastText: string;
+};
+
+/**
+ * Derive a lane's recent trace from its events: a start pushes an inflight entry,
+ * its matching end (by toolCallId) closes it with durationMs. `maxTools` keeps the tail.
+ */
+export function deriveTrace(events: LaneEvent[], maxTools = 8): TraceSummary {
+	const tools: TraceTool[] = [];
+	const byId = new Map<string, TraceTool>();
+	for (const e of events) {
+		if (e.type === "tool_execution_start" && typeof e.toolCallId === "string" && typeof e.toolName === "string") {
+			const tool: TraceTool = { name: e.toolName, args: e.args, inflight: true };
+			tools.push(tool);
+			byId.set(e.toolCallId, tool);
+		}
+		if (e.type === "tool_execution_end" && typeof e.toolCallId === "string") {
+			const tool = byId.get(e.toolCallId);
+			if (tool !== undefined) {
+				tool.durationMs = typeof e.durationMs === "number" ? e.durationMs : undefined;
+				tool.inflight = undefined;
+			}
+		}
+	}
+	return { tools: tools.slice(-maxTools), lastText: finalAssistantText(events) };
+}
+
+/** One wave in the scanned listing; `error` carries a read/parse failure, never a drop. */
+export type WaveScan =
+	| {
+			ok: true;
+			wave: string;
+			workDir: string;
+			/** Derivation snapshot at scan time — the listing renders, never re-derives. */
+			statuses: LaneStatus[];
+			/** Owner is provably a dead session (or a pre-owner manifest), not this one. */
+			priorSession: boolean;
+			createdAt: string;
+		}
+	| { ok: false; wave: string; workDir: string; error: string };
+
+/** Wave slugs discoverable in `workDir` from `*-manifest.json` filenames — no parsing, cheap enough for completion. */
+export function waveSlugsIn(workDir: string): string[] {
+	try {
+		return fs
+			.readdirSync(workDir)
+			.filter((f) => f.endsWith("-manifest.json"))
+			.map((f) => f.slice(0, -"-manifest.json".length));
+	} catch {
+			return []; // unreadable dir = no suggestions, not a crash
+	}
+}
+
+/**
+ * Scan `workDirs` (deduped) for wave manifests, fail-soft per wave: a corrupt
+ * manifest is listed with its error. Pure derivation per found wave.
+ */
+export function scanWaves(workDirs: string[], selfSid: string, currentHost: string, now: number): WaveScan[] {
+	const out: WaveScan[] = [];
+	const seen = new Set<string>();
+	for (const workDir of [...new Set(workDirs)]) {
+		for (const wave of waveSlugsIn(workDir)) {
+			const key = `${workDir}/${wave}`;
+			if (seen.has(key)) continue;
+			seen.add(key);
+			try {
+				const m = readManifest(workDir, wave);
+				const owner = ownerStatus(m.owner, selfSid, currentHost);
+				out.push({
+					ok: true,
+					wave,
+					workDir,
+					statuses: m.lanes.map((l) => deriveLane(l, now)),
+					priorSession: owner === "dead" || owner === "unknown",
+					createdAt: m.createdAt,
+				});
+			} catch (e: any) {
+				out.push({ ok: false, wave, workDir, error: e.message });
+			}
+		}
+	}
+	return out.sort((a, b) => a.wave.localeCompare(b.wave));
 }
 
 export { parseEvents };

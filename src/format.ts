@@ -3,7 +3,7 @@
  * shared by the `lanes` tool, the `/lanes` command, and the statusbar.
  */
 
-import { type LaneStatus } from "./derive.ts";
+import { type LaneStatus, type TraceSummary, type WaveScan } from "./derive.ts";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -159,7 +159,7 @@ export function fileUri(p: string): string {
 /** Path → rendered string for a TUI surface; the glue injects the real (gated) hyperlink. */
 export type PathRenderer = (absolutePath: string) => string;
 
-/** `/lanes`-only table: the LLM lines unchanged, plus linked files for failed lanes. */
+/** `/lanes` wave view's lane lines: the LLM lines unchanged, plus linked files for failed lanes (the wave header carries the caption). */
 export function formatWaveStatusTui(
 	wave: string,
 	lanes: Array<{ status: LaneStatus; eventsPath: string; errPath: string }>,
@@ -170,5 +170,115 @@ export function formatWaveStatusTui(
 		if (s.state !== "failed") return base;
 		return `${base}\n    files: ${renderPath(eventsPath)} · ${renderPath(errPath)}`;
 	});
-	return `wave '${wave}':\n${lines.join("\n")}`;
+	return lines.join("\n");
+}
+
+// --- /lanes inspector -------------------------------------------------------
+
+/** Fixed truncation for one-line trace snippets (tool args, text previews). */
+export const TRACE_SNIPPET_CHARS = 80;
+
+/** Single-lined, length-capped rendering of a trace value — args or text preview. */
+export function snippet(value: unknown): string {
+	const s = typeof value === "string" ? value : JSON.stringify(value) ?? String(value);
+	const one = s.replace(/\s+/g, " ").trim();
+	return one.length > TRACE_SNIPPET_CHARS ? `${one.slice(0, TRACE_SNIPPET_CHARS)}…` : one;
+}
+
+/** Human wall-clock span: 45s · 12m30s · 1h05m. */
+export function formatDuration(totalSec: number): string {
+	const s = Math.max(0, Math.round(totalSec));
+	if (s < 60) return `${s}s`;
+	const m = Math.floor(s / 60);
+	if (m < 60) return `${m}m${String(s % 60).padStart(2, "0")}s`;
+	return `${Math.floor(m / 60)}h${String(m % 60).padStart(2, "0")}m`;
+}
+
+/** Tool-call duration: 840ms · 8.4s · 1m02s — sub-second precision kept. */
+export function formatMillis(ms: number): string {
+	if (ms < 1000) return `${Math.round(ms)}ms`;
+	if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+	return formatDuration(ms / 1000);
+}
+
+/** The one-line grammar hint shared by the listing and unknown-wave errors. */
+export function lanesUsageLine(): string {
+	return "usage: /lanes [wave] [lane] — list waves · inspect one wave · inspect one lane";
+}
+
+/** `/lanes` no-args listing: one line per scanned wave, corrupt manifests included. */
+export function formatWaveList(scans: WaveScan[]): string {
+	const lines = scans.map((sc) => {
+		if (!sc.ok) return `  ${sc.wave} — manifest error: ${sc.error}`;
+		const prior = sc.priorSession ? " (prior session)" : "";
+		const counts: Record<string, number> = {};
+		for (const s of sc.statuses) counts[s.state] = (counts[s.state] ?? 0) + 1;
+		const states = ["running", "starting", "failed", "settled"]
+			.filter((k) => counts[k] > 0)
+			.map((k) => `${counts[k]} ${k}`)
+			.join(" · ");
+		return `  ${sc.wave}${prior} — ${sc.statuses.length} lane${sc.statuses.length === 1 ? "" : "s"} · ${states}`;
+	});
+	const body = lines.length > 0 ? lines.join("\n") : "  no waves found";
+	return `waves:\n${body}\n${lanesUsageLine()}`;
+}
+
+/** Wave-level header for `/lanes <wave>`: wall clock since dispatch + pure usage sums. */
+export function formatWaveHeader(wave: string, createdAt: string, statuses: LaneStatus[], now: number): string {
+	const usage = statuses.reduce(
+		(a, s) => ({ input: a.input + s.usage.input, output: a.output + s.usage.output, cost: a.cost + s.usage.cost }),
+		{ input: 0, output: 0, cost: 0 },
+	);
+	const dur = formatDuration((now - Date.parse(createdAt)) / 1000);
+	return `wave '${wave}' — ${dur} since dispatch · ${statuses.length} lanes · tok ${usage.input}in/${usage.output}out · $${usage.cost.toFixed(4)}`;
+}
+
+/** Everything the single-lane inspector needs; the glue reads files, this renders. */
+export type InspectorInput = {
+	wave: string;
+	status: LaneStatus;
+	trace: TraceSummary;
+	eventsPath: string;
+	errPath: string;
+	/** Present when the collect artifact exists — content read by the glue. */
+	artifact?: { path: string; content: string };
+};
+
+/** `/lanes <wave> <lane>`: single-lane view shaped by the lane's state. */
+export function formatLaneInspector(l: InspectorInput, renderPath: PathRenderer): string {
+	const s = l.status;
+	const id = [s.model, s.thinkingLevel !== undefined ? `think:${s.thinkingLevel}` : undefined].filter(Boolean).join(" ");
+	const head = [`lane '${s.name}' in wave '${l.wave}' — ${s.state}${s.cause !== undefined ? ` (${s.cause})` : ""}`];
+	const bits: string[] = [];
+	if (id !== "") bits.push(id);
+	if (s.state !== "starting") bits.push(s.turns === 1 ? "1 turn" : `${s.turns} turns`);
+	if (s.state === "settled" || s.state === "failed") bits.push(`tok ${s.usage.input}in/${s.usage.output}out · $${s.usage.cost.toFixed(4)}`);
+	if (s.stopReason !== undefined) bits.push(`stop:${s.stopReason}`);
+	if (s.lastEventAgeSec !== null) bits.push(`last ${s.lastEventAgeSec}s ago`);
+	if (bits.length > 0) head.push(`  ${bits.join(" · ")}`);
+	if (s.spawnError !== undefined) head.push(`  spawn error: ${s.spawnError}`);
+
+	const out = [...head];
+	if (s.errTail !== undefined) out.push(`  err: ${s.errTail.replace(/\n/g, "\n    ")}`);
+	if (l.trace.tools.length > 0) {
+		out.push("  trace:");
+		for (const t of l.trace.tools) {
+			const tail = t.inflight === true ? "in flight" : t.durationMs !== undefined ? formatMillis(t.durationMs) : "closed";
+			out.push(`    ${t.name} ${snippet(t.args)} — ${tail}`);
+		}
+	}
+	if (s.state === "settled") {
+		if (l.artifact !== undefined) {
+			const bytes = Buffer.byteLength(l.artifact.content, "utf8");
+			out.push(`  artifact: ${renderPath(l.artifact.path)} (${bytes} B)`);
+			out.push(l.artifact.content.replace(/\n$/, "").split("\n").map((line) => `    ${line}`).join("\n"));
+		} else {
+			if (l.trace.lastText !== "") out.push(`  last text: ${snippet(l.trace.lastText)}`);
+			out.push("  artifact: not yet collected");
+		}
+	} else if (l.trace.lastText !== "") {
+		out.push(`  last text: ${snippet(l.trace.lastText)}`);
+	}
+	if (s.state === "failed") out.push(`  transcript: ${renderPath(l.eventsPath)} · err: ${renderPath(l.errPath)}`);
+	return out.join("\n");
 }
