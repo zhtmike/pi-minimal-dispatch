@@ -118,6 +118,7 @@ Per-lane `structuredContent` entries. Note: `settled` only means the
 | `thinkingLevel` | string? | thinking level of the last assistant message (`off`–`max`); until the first message_end, the pinned level — explicit `thinking` over the model's `:level` suffix (`message_start` carries no level, so a pinned one stays) |
 | `stopReason` | string? | last assistant stop reason (`stop` is clean) |
 | `lastEventAgeSec` | number? | seconds since the events file last grew — the stuck-lane signal |
+| `inflightTool` | string? | the lane's current tool — the latest `tool_execution_start` with no matching `_end` (`_start` carries no timestamp, so no tool age is derivable) |
 | `spawnError` | string? | why a `spawn`-failed lane never started |
 | `errTail` | string? | last lines of `.err` for `crashed` lanes |
 

@@ -48,8 +48,10 @@ one deliberately small surface.
    and a local `stringEnum` helper where pi-ai's `StringEnum` lost its
    TypeBox-inferable static type; `registerTool`, `registerCommand`,
    `on("session_start"|"session_shutdown")`,
-   and `ctx.ui.setStatus` from the pi host. Plain TypeScript, no build
-   step (pi runs extensions via jiti).
+   and `ctx.ui.setStatus` from the pi host; `getCapabilities` and
+   `hyperlink` from `@earendil-works/pi-tui` (the host loader's alias of
+   its own copy — a host-provided package, never a dependency entry).
+   Plain TypeScript, no build step (pi runs extensions via jiti).
 
 ## Mechanics
 

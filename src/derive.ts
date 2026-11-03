@@ -62,6 +62,8 @@ export type LaneStatus = {
 	model?: string;
 	/** Thinking level of the last assistant message; before the first, the pinned level (explicit `thinking` over the model's suffix). */
 	thinkingLevel?: string;
+	/** Latest `tool_execution_start` with no matching `_end` yet — the tool running right now. */
+	inflightTool?: string;
 	stopReason?: string;
 	lastEventAgeSec: number | null;
 	spawnError?: string;
@@ -249,6 +251,8 @@ export function deriveLane(lane: LaneRecord, now: number): LaneStatus {
 	if (!lane.spawned) return { ...base, cause: "spawn", spawnError: lane.spawnError };
 
 	const events = parseEvents(lane.eventsPath);
+	// Open tool calls keyed by id in start order; the last one is the tool running now.
+	const openTools = new Map<string, string>();
 	for (const e of events) {
 		if (e.type === "turn_start") base.turns++;
 		// message_start reveals the answering model at generation start; it carries no
@@ -273,7 +277,14 @@ export function deriveLane(lane: LaneRecord, now: number): LaneStatus {
 				base.thinkingLevel = typeof message.thinkingLevel === "string" ? message.thinkingLevel : undefined;
 			}
 		}
+		if (e.type === "tool_execution_start" && typeof e.toolCallId === "string" && typeof e.toolName === "string") {
+			openTools.set(e.toolCallId, e.toolName);
+		}
+		if (e.type === "tool_execution_end" && typeof e.toolCallId === "string") {
+			openTools.delete(e.toolCallId);
+		}
 	}
+	if (openTools.size > 0) base.inflightTool = [...openTools.values()].at(-1);
 	if (fs.existsSync(lane.eventsPath)) {
 		base.lastEventAgeSec = Math.round((now - fs.statSync(lane.eventsPath).mtimeMs) / 100) / 10;
 	}

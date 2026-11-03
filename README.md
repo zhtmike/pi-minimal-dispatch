@@ -131,11 +131,31 @@ parameters. Invalid files fail loudly. Full table and precedence rules:
 
 ## Status bar & `/lanes`
 
-While any tracked lane runs, the footer shows one line (e.g.
-`lanes: 2 running · 1 settled`), cleared when nothing is in flight.
+While any tracked lane runs — or has failed and the wave is not yet
+released — the footer shows one line. Segments sit in a fixed order,
+empty ones dropped: `[telemetry | running-count] · [idle/overdue
+badge] · [failed badge] · [settled/failed counts]`, e.g.
+`lanes: 2 running · 1 failed (deadline) · 1 settled`. An unreleased
+failure keeps the footer (and its poll tick) alive until the wave is
+released; a fully settled wave clears it. A `running` lane silent for
+≥ 60s badges `(1 idle 75s)` with its honest last-event age — a signal,
+not a verdict: a lane legitimately inside a long `bash` run trips it
+too. A lane past its deadline badges `(1 overdue)` (the badge is a
+signal; the kill-and-redispatch discipline still decides). When exactly
+one lane is running, the count becomes micro-telemetry —
+`lanes [survey/docs]: running (turn 3 · bash · last 12s)` — the
+in-flight tool from the latest unmatched `tool_execution_start`;
+`tool_execution_start` carries no timestamp, so no tool age is shown.
+
 `/lanes [<wave>]` prints the full status table for waves seen this
 session (an untracked wave name is resolved from the default workDir)
-and completes wave names. Each line tags the lane with its model —
+and completes wave names. Failed lanes also list their transcript and
+`.err` paths, clickable when the terminal proves capable (pi's own
+OSC 8 gate — `PI_HYPERLINKS` overrides; plain absolute/`~` paths
+otherwise). A click opens the absolute `file://` target — it works
+exactly where the terminal's machine can reach the file, so under
+SSH+tmux the paths are for copy-paste. Each line tags the lane
+with its model —
 short id (provider prefix dropped), `think:<level>` appended when set —
 the actual model from the event stream once generation begins, the
 pinned value before that, `[default]` for a no-pin lane that hasn't
