@@ -3,7 +3,9 @@
  * shared by the `lanes` tool, the `/lanes` command, and the statusbar.
  */
 
-import type { LaneStatus } from "./derive.ts";
+import { type LaneStatus } from "./derive.ts";
+import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 
 /**
  * Suspect flag with its first-applicable cause: `failed:<cause>` (killed/
@@ -91,16 +93,82 @@ export function formatWaveStatus(wave: string, statuses: LaneStatus[]): string {
 	return `wave '${wave}':\n${statuses.map(formatLaneLine).join("\n")}`;
 }
 
-/** Footer summary across tracked waves; undefined when nothing is in flight — clear the status entry. */
-export function formatStatusBarSummary(statuses: LaneStatus[]): string | undefined {
-	let running = 0;
-	const done: Record<string, number> = {};
-	for (const s of statuses) {
-		if (s.state === "running" || s.state === "starting") running++;
-		else done[s.state] = (done[s.state] ?? 0) + 1;
+// --- statusbar footer -------------------------------------------------------
+
+/** Footer entry: a lane status tagged with its wave — the tick knows the manifest. */
+export type StatusBarEntry = LaneStatus & { wave?: string };
+
+/** A lane this stale without a word is the straggler signal — fixed, not configurable. */
+export const IDLE_AFTER_SEC = 60;
+
+/** Footer summary across tracked waves; undefined when nothing to watch — clear the status entry. */
+export function formatStatusBarSummary(statuses: StatusBarEntry[]): string | undefined {
+	if (statuses.length === 0) return undefined;
+	const inflight = statuses.filter((s) => s.state === "running" || s.state === "starting");
+	const failed = statuses.filter((s) => s.state === "failed");
+	const settled = statuses.filter((s) => s.state === "settled");
+	// In-flight lanes or an unreleased failure keep the footer (and its poll tick) alive;
+	// a fully settled wave clears it — collect is the next step and the tool results carry it.
+	if (inflight.length === 0 && failed.length === 0) return undefined;
+
+	const parts: string[] = [];
+	// [telemetry | running-count] — telemetry only for a lone running lane the tick can name
+	const lone = inflight.length === 1 && inflight[0].state === "running" && inflight[0].wave !== undefined ? inflight[0] : undefined;
+	if (lone !== undefined) {
+		const bits = [`turn ${lone.turns}`];
+		if (lone.inflightTool !== undefined) bits.push(lone.inflightTool);
+		if (lone.lastEventAgeSec !== null) bits.push(`last ${Math.round(lone.lastEventAgeSec)}s`);
+		parts.push(`lanes [${lone.wave}/${lone.name}]: running (${bits.join(" · ")})`);
+	} else if (inflight.length > 0) {
+		parts.push(`${inflight.length} running`);
 	}
-	if (running === 0) return undefined;
-	const parts = [`${running} running`];
-	for (const [k, v] of Object.entries(done).sort()) if (v > 0) parts.push(`${v} ${k}`);
-	return `lanes: ${parts.join(" · ")}`;
+
+	// [idle/overdue badge] — the age is the honest last-event age; overdue needs no age
+	const idle = inflight.filter((s) => s.state === "running" && !s.overdue && s.lastEventAgeSec !== null && s.lastEventAgeSec >= IDLE_AFTER_SEC);
+	const overdue = inflight.filter((s) => s.state === "running" && s.overdue);
+	const badges: string[] = [];
+	if (idle.length > 0) badges.push(`${idle.length} idle ${Math.round(Math.max(...idle.map((s) => s.lastEventAgeSec ?? 0)))}s`);
+	if (overdue.length > 0) badges.push(`${overdue.length} overdue`);
+	if (badges.length > 0) parts.push(`(${badges.join(" · ")})`);
+
+	// [failed badge] · [settled/failed counts] — the failed bucket carries the first cause
+	if (failed.length > 0) parts.push(`${failed.length} failed${failed[0].cause !== undefined ? ` (${failed[0].cause})` : ""}`);
+	if (settled.length > 0) parts.push(`${settled.length} settled`);
+
+	return `${lone !== undefined ? "" : "lanes: "}${parts.join(" · ")}`;
+}
+
+// --- TUI path display -------------------------------------------------------
+
+/** Link display text: `./`-relative under the cwd, absolute outside it — TUI surfaces only. */
+export function displayPath(p: string, cwd: string): string {
+	const rel = path.relative(cwd, p);
+	return rel !== "" && !rel.startsWith(`..${path.sep}`) && rel !== ".." ? `.${path.sep}${rel}` : p;
+}
+
+/** Plain fallback (links off): absolute or `~`-collapsed — a bare `./rel` would be unanchored. */
+export function plainPath(p: string, home: string): string {
+	return p === home || p.startsWith(`${home}/`) ? `~${p.slice(home.length)}` : p;
+}
+
+/** OSC 8 target for a path — pi core's own `linkPath` form (`pathToFileURL`). */
+export function fileUri(p: string): string {
+	return pathToFileURL(p).href;
+}
+
+/** Path → rendered string for a TUI surface; the glue injects the real (gated) hyperlink. */
+export type PathRenderer = (absolutePath: string) => string;
+
+/** `/lanes`-only table: the LLM lines unchanged, plus linked files for failed lanes. */
+export function formatWaveStatusTui(
+	wave: string,
+	lanes: Array<{ status: LaneStatus; eventsPath: string; errPath: string }>,
+	renderPath: PathRenderer,
+): string {
+	const lines = lanes.map(({ status: s, eventsPath, errPath }) => {
+		const base = formatLaneLine(s);
+		if (s.state !== "failed") return base;
+		return `${base}\n    files: ${renderPath(eventsPath)} · ${renderPath(errPath)}`;
+	});
+	return `wave '${wave}':\n${lines.join("\n")}`;
 }

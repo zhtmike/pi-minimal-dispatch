@@ -91,6 +91,28 @@ writeEvents([session, turn, assistantEnd({ input: 7 }, "toolUse")]);
 s = deriveLane(lane({ pid: process.pid, processStart: psLstart(process.pid), startedAt: new Date(Date.now() - 20000).toISOString(), deadlineSec: 5 }), Date.now());
 check("running + overdue: alive past deadline keeps running with overdue flag", s.state === "running" && s.overdue === true, JSON.stringify(s));
 
+// --- inflightTool ------------------------------------------------------------
+
+const toolStart = (id: string, name: string) => JSON.stringify({ type: "tool_execution_start", toolCallId: id, toolName: name, args: {} });
+const toolEnd = (id: string) => JSON.stringify({ type: "tool_execution_end", toolCallId: id, toolName: "x", result: {}, isError: false });
+const alive = () => lane({ pid: process.pid, processStart: psLstart(process.pid) });
+
+writeEvents([session, turn, assistantEnd({ input: 7 }, "toolUse"), toolStart("c1", "bash")]);
+s = deriveLane(alive(), Date.now());
+check(
+	"inflightTool: latest unmatched tool_execution_start names the running tool",
+	s.inflightTool === "bash" && s.state === "running",
+	JSON.stringify(s),
+);
+
+writeEvents([session, turn, toolStart("c1", "bash"), toolEnd("c1"), toolStart("c2", "read"), toolEnd("c2"), toolStart("c3", "grep")]);
+s = deriveLane(alive(), Date.now());
+check("inflightTool: paired start/end cancel; only the unmatched start survives", s.inflightTool === "grep");
+
+writeEvents([session, turn, toolStart("c1", "bash"), toolEnd("c1"), '{"type":"agent_settled","aborted":false}']);
+s = deriveLane(alive(), Date.now());
+check("inflightTool: settled lane with all tools closed carries none", s.state === "settled" && s.inflightTool === undefined);
+
 writeEvents([session]);
 fs.writeFileSync(errPath, "boom\nboom2\n");
 s = deriveLane(lane({ pid: deadPid }), Date.now());

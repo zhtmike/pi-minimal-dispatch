@@ -8,14 +8,15 @@
 
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
-import { hostname } from "node:os";
+import { homedir, hostname } from "node:os";
 import * as path from "node:path";
 import { Type } from "typebox";
 import { defineTool, type AgentToolResult, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+// Host-aliased to pi's own copy (docs/packages.md) — never listed in dependencies.
+import { getCapabilities, hyperlink } from "@earendil-works/pi-tui";
 import { type DispatchConfig, loadConfig } from "./config.ts";
 import {
 	type LaneRecord,
-	type LaneStatus,
 	type Manifest,
 	artifactPathFor,
 	currentOwner,
@@ -33,7 +34,7 @@ import {
 	waveTerminal,
 	writeManifestAtomic,
 } from "./derive.ts";
-import { formatCollectEntry, formatStatusBarSummary, formatWaveStatus, suspectOf } from "./format.ts";
+import { type PathRenderer, type StatusBarEntry, displayPath, fileUri, formatCollectEntry, formatStatusBarSummary, formatWaveStatus, formatWaveStatusTui, plainPath, suspectOf } from "./format.ts";
 import { type LaneParams, assertActionParams, assertBriefTools, assertLaneTools, assertSlugs, buildLaneArgs, laneEnv, missingBriefs, missingBriefsError, resolveExecutable, resolveLaneFilter, selectKillTargets } from "./lane.ts";
 
 /**
@@ -233,7 +234,7 @@ const lanesTool = defineTool({
 		"Observe/control a dispatched wave. action=status (default): per-lane derived state " +
 		"(starting/running/settled/failed + cause spawn|killed|deadline|crashed), turns, run-total usage, " +
 		"model + thinking level (actual, from the event stream — message_start's model once generation begins, last assistant message once it answers; pinned value before that; [default] in status lines for a pre-generation lane that pins nothing), " +
-		"stopReason, last-event age, .err tail for crashed lanes. action=wait: hold this call open, " +
+		"stopReason, last-event age, in-flight tool name (latest unmatched tool_execution_start), .err tail for crashed lanes. action=wait: hold this call open, " +
 		"re-deriving at the pollMs cadence, until every lane is settled/failed (or the first one, with " +
 		"waitMode:'any') or waitSec (default 300, " +
 		"max 3600) elapses — then return the status table; replaces blind sleep-then-status polling. " +
@@ -440,7 +441,7 @@ let uiCtx: UiCtx | null = null;
 function statusBarTick(): void {
 	const ctx = uiCtx;
 	if (ctx === null) return;
-	const all: LaneStatus[] = [];
+	const all: StatusBarEntry[] = [];
 	for (const [wave, workDir] of tracked) {
 		if (!fs.existsSync(manifestPathFor(workDir, wave))) {
 			tracked.delete(wave); // the wave was cleaned up
@@ -448,7 +449,8 @@ function statusBarTick(): void {
 		}
 		try {
 			const m = readManifest(workDir, wave);
-			all.push(...m.lanes.map((l) => deriveLane(l, Date.now())));
+			// wave-tagged so the footer can name the lone running lane
+			all.push(...m.lanes.map((l) => ({ ...deriveLane(l, Date.now()), wave: m.wave })));
 		} catch {
 			// corrupt manifest/events: skipped this tick — /lanes and the lanes tool surface the error loudly
 		}
@@ -505,8 +507,16 @@ export default function (pi: ExtensionAPI) {
 			return hits.length > 0 ? hits.map((w) => ({ value: w, label: w })) : null;
 		},
 		handler: async (args, ctx) => {
-			const show = (wave: string, workDir: string) =>
-				ctx.ui.notify(formatWaveStatus(wave, readManifest(workDir, wave).lanes.map((l) => deriveLane(l, Date.now()))), "info");
+			// The real gate (PI_HYPERLINKS, tmux probe) — plain paths wherever the terminal can't link.
+			const links = getCapabilities().hyperlinks;
+			const renderPath: PathRenderer = (p) =>
+				links ? hyperlink(displayPath(p, ctx.cwd), fileUri(p)) : plainPath(p, homedir());
+			const show = (wave: string, workDir: string) => {
+				const m = readManifest(workDir, wave);
+				const now = Date.now();
+				const lanes = m.lanes.map((l) => ({ status: deriveLane(l, now), eventsPath: l.eventsPath, errPath: l.errPath }));
+				ctx.ui.notify(formatWaveStatusTui(wave, lanes, renderPath), "info");
+			};
 			try {
 				const wave = args.trim();
 				if (wave === "") {

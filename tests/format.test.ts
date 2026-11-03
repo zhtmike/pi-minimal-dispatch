@@ -4,7 +4,7 @@
  */
 
 import type { LaneStatus } from "../src/derive.ts";
-import { formatCollectEntry, formatInlineArtifact, formatLaneLine, formatStatusBarSummary, suspectOf } from "../src/format.ts";
+import { IDLE_AFTER_SEC, displayPath, fileUri, formatCollectEntry, formatInlineArtifact, formatLaneLine, formatStatusBarSummary, formatWaveStatusTui, plainPath, suspectOf } from "../src/format.ts";
 
 let failures = 0;
 function check(name: string, cond: boolean, detail?: string) {
@@ -29,12 +29,100 @@ check(
 	formatStatusBarSummary([st({ state: "running" }), st({ state: "starting", name: "b" }), st({ state: "settled", name: "c" })]) === "lanes: 2 running · 1 settled",
 );
 check(
-	"statusbar: done buckets in stable sorted order (failed before settled)",
-	formatStatusBarSummary([st({ state: "settled" }), st({ state: "running" }), st({ state: "failed", cause: "crashed", name: "d" })]) === "lanes: 1 running · 1 failed · 1 settled",
+	"statusbar: done buckets in stable sorted order — the failed bucket carries its cause",
+	formatStatusBarSummary([st({ state: "settled" }), st({ state: "running" }), st({ state: "failed", cause: "crashed", name: "d" })]) === "lanes: 1 running · 1 failed (crashed) · 1 settled",
 );
 check(
-	"statusbar: nothing in flight → undefined (clear)",
-	formatStatusBarSummary([st({ state: "settled" }), st({ state: "failed", cause: "deadline", name: "b" })]) === undefined && formatStatusBarSummary([]) === undefined,
+	"statusbar: an unreleased failure keeps the footer; settled-only and empty clear it",
+	formatStatusBarSummary([st({ state: "settled" }), st({ state: "failed", cause: "deadline", name: "b" })]) === "lanes: 1 failed (deadline) · 1 settled" &&
+		formatStatusBarSummary([st({ state: "settled" }), st({ state: "settled", name: "b" })]) === undefined &&
+		formatStatusBarSummary([]) === undefined,
+);
+
+// --- statusbar: badges, telemetry, composition -------------------------------
+
+check(
+	"statusbar telemetry: one running wave-tagged lane — turn, in-flight tool, honest age",
+	formatStatusBarSummary([{ ...st({ name: "docs", turns: 3, inflightTool: "bash", lastEventAgeSec: 12 }), wave: "survey" }]) ===
+		"lanes [survey/docs]: running (turn 3 · bash · last 12s)",
+	formatStatusBarSummary([{ ...st({ name: "docs", turns: 3, inflightTool: "bash", lastEventAgeSec: 12 }), wave: "survey" }]),
+);
+check(
+	"statusbar telemetry: no in-flight tool or age yet — those bits drop out",
+	formatStatusBarSummary([{ ...st({ name: "docs", inflightTool: undefined, lastEventAgeSec: null }), wave: "survey" }]) ===
+		"lanes [survey/docs]: running (turn 1)",
+);
+check(
+	"statusbar telemetry: needs the wave tag, a running (not starting) lane, and no sibling in flight",
+	formatStatusBarSummary([st({ name: "docs" })]) === "lanes: 1 running" &&
+		formatStatusBarSummary([{ ...st({ name: "docs" }), wave: "survey" }, st({ state: "starting", name: "b" })]) === "lanes: 2 running",
+);
+check(
+	"statusbar idle: a lane silent past the threshold badges with its honest age (59 no, 60/74.7 yes)",
+	formatStatusBarSummary([st({ lastEventAgeSec: IDLE_AFTER_SEC - 1 })]) === "lanes: 1 running" &&
+		formatStatusBarSummary([st({ lastEventAgeSec: IDLE_AFTER_SEC })]) === "lanes: 1 running · (1 idle 60s)" &&
+		formatStatusBarSummary([st({ lastEventAgeSec: 74.7 })]) === "lanes: 1 running · (1 idle 75s)",
+);
+check(
+	"statusbar idle: several stale lanes badge once with the oldest age",
+	formatStatusBarSummary([st({ lastEventAgeSec: 61 }), st({ name: "b", lastEventAgeSec: 180 })]) === "lanes: 2 running · (2 idle 180s)",
+);
+check(
+	"statusbar overdue: overdue-but-fresh badges overdue; overdue-and-stale stays overdue, never a mixed double badge",
+	formatStatusBarSummary([st({ overdue: true, lastEventAgeSec: 5 })]) === "lanes: 1 running · (1 overdue)" &&
+		formatStatusBarSummary([st({ overdue: true, lastEventAgeSec: 300 })]) === "lanes: 1 running · (1 overdue)" &&
+		formatStatusBarSummary([st({ overdue: true, lastEventAgeSec: 5 }), st({ name: "b", lastEventAgeSec: 75 })]) === "lanes: 2 running · (1 idle 75s · 1 overdue)",
+);
+check(
+	"statusbar composition: telemetry · badge · failed · settled, empty segments dropped",
+	formatStatusBarSummary([
+		{ ...st({ name: "docs", turns: 3, inflightTool: "grep", lastEventAgeSec: 90, overdue: true }), wave: "survey" },
+		st({ state: "failed", cause: "deadline", name: "b" }),
+		st({ state: "settled", name: "c" }),
+	]) === "lanes [survey/docs]: running (turn 3 · grep · last 90s) · (1 overdue) · 1 failed (deadline) · 1 settled",
+);
+check(
+	"statusbar: failed without a cause renders the bare bucket",
+	formatStatusBarSummary([st({ state: "failed", cause: undefined, name: "b" })]) === "lanes: 1 failed",
+);
+
+// --- TUI path display --------------------------------------------------------
+
+check(
+	"paths: under cwd display ./-relative; outside stays absolute; cwd itself stays put",
+	displayPath("/repo/.pi/work/w-docs.md", "/repo") === "./.pi/work/w-docs.md" &&
+		displayPath("/elsewhere/x.md", "/repo") === "/elsewhere/x.md" &&
+		displayPath("/repo", "/repo") === "/repo" &&
+		displayPath("/repo2/x.md", "/repo") === "/repo2/x.md",
+);
+check(
+	"paths: plain fallback collapses home to ~, never a bare relative",
+	plainPath("/Users/me/.pi/work/x.md", "/Users/me") === "~/.pi/work/x.md" &&
+		plainPath("/Users/mex/x.md", "/Users/me") === "/Users/mex/x.md" &&
+		plainPath("/Users/me", "/Users/me") === "~",
+);
+check(
+	"paths: file URI is pi core's pathToFileURL form (encoded)",
+	fileUri("/tmp/a b/c#d.md") === "file:///tmp/a%20b/c%23d.md",
+);
+check(
+	"lanes tui table: failed lanes gain linked files, others stay unchanged",
+	(() => {
+		const seen: string[] = [];
+		const link = (p: string) => (seen.push(p), `<${p}>`);
+		const out = formatWaveStatusTui(
+			"w",
+			[
+				{ status: st({ state: "failed", cause: "crashed", name: "a" }), eventsPath: "/w/w-a.events.jsonl", errPath: "/w/w-a.err" },
+				{ status: st({ name: "b" }), eventsPath: "/w/w-b.events.jsonl", errPath: "/w/w-b.err" },
+			],
+			link,
+		);
+		return (
+			out.includes("\n    files: </w/w-a.events.jsonl> · </w/w-a.err>") &&
+			!out.includes("w-b.events") && seen.length === 2
+		);
+	})(),
 );
 check(
 	"lane line: cause, overdue, singular turns, err tail indentation",
