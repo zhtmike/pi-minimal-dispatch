@@ -11,9 +11,9 @@ import * as fs from "node:fs";
 import { homedir, hostname } from "node:os";
 import * as path from "node:path";
 import { Type } from "typebox";
-import { defineTool, type AgentToolResult, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { defineTool, getMarkdownTheme, type AgentToolResult, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 // Host-aliased to pi's own copy (docs/packages.md) — never listed in dependencies.
-import { getCapabilities, hyperlink } from "@earendil-works/pi-tui";
+import { getCapabilities, hyperlink, Markdown, Text } from "@earendil-works/pi-tui";
 import { type DispatchConfig, loadConfig } from "./config.ts";
 import {
 	type LaneRecord,
@@ -38,10 +38,13 @@ import {
 	writeManifestAtomic,
 } from "./derive.ts";
 import {
+	type CollectSnapshotEntry,
 	type PathRenderer,
 	type StatusBarEntry,
+	collectSnapshotEntry,
 	displayPath,
 	fileUri,
+	formatCollectExpanded,
 	formatCollectEntry,
 	formatLaneInspector,
 	formatStatusBarSummary,
@@ -310,7 +313,7 @@ const lanesTool = defineTool({
 		workDir: Type.Optional(Type.String({ description: "Directory holding the manifest (config default: .pi/work)" })),
 	}),
 
-	async execute(_id, params, signal, _onUpdate, ctx): Promise<AgentToolResult<{ wave: string }>> {
+	async execute(_id, params, signal, _onUpdate, ctx): Promise<AgentToolResult<{ wave: string; snapshot?: CollectSnapshotEntry[] }>> {
 		const cfg = loadConfig();
 		const workDir = path.resolve(params.workDir ?? cfg.workDir);
 		const action = params.action ?? "status";
@@ -376,7 +379,7 @@ const lanesTool = defineTool({
 					// tombstoned earlier dies on its own schedule, unwatched here.
 					const survivors = targets.filter(
 						(l) => l.killedAt !== undefined && l.pid !== null && pidAlive(l.pid, l.processStart),
-						);
+					);
 					if (survivors.length === 0) break;
 					if (Date.now() + 200 >= deadline) {
 						for (const l of survivors) {
@@ -434,6 +437,7 @@ const lanesTool = defineTool({
 		const inlineMaxBytes = params.inlineMaxBytes ?? 0;
 		const results: Array<{ name: string; artifact?: string; suspect?: boolean; suspectCause?: string; reason?: string; stopReason?: string }> = [];
 		const contents = new Map<string, string>(); // display-only: artifact content never enters structuredContent
+		const snapshot: CollectSnapshotEntry[] = []; // details-only: the expanded TUI block renders this, never disk
 		for (const lane of collectScope) {
 			const status = deriveLane(lane, Date.now());
 			if (status.cause === "spawn") {
@@ -451,13 +455,25 @@ const lanesTool = defineTool({
 			fs.writeFileSync(artifact, written);
 			results.push({ name: lane.name, artifact, suspect, suspectCause: cause, stopReason: status.stopReason });
 			contents.set(lane.name, written);
+			snapshot.push(collectSnapshotEntry(lane.name, artifact, written));
 		}
 		const text = results.map((r) => formatCollectEntry({ ...r, content: contents.get(r.name) }, inlineMaxBytes)).join("\n");
 		return {
 			content: [{ type: "text", text: `collect wave '${params.wave}':\n${text}` }],
 			structuredContent: { wave: params.wave, results },
-			details: { wave: params.wave },
+			details: { wave: params.wave, snapshot },
 		};
+	},
+	// Collect results only: every other action throws through to the host's own default
+	// rendering, and the collapsed state is the collect text as-is.
+	renderResult(result, options, theme) {
+		const snapshot = result.details?.snapshot;
+		if (snapshot === undefined) throw new Error("not a collect result");
+		if (!options.expanded) {
+			const body = result.content.map((b) => (b.type === "text" ? b.text : "")).join("\n");
+			return new Text(theme.fg("toolOutput", body), 0, 0);
+		}
+		return new Markdown(formatCollectExpanded(snapshot), 0, 0, getMarkdownTheme());
 	},
 });
 
