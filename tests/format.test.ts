@@ -6,11 +6,14 @@
 import type { LaneStatus } from "../src/derive.ts";
 import { type TraceSummary, type WaveScan } from "../src/derive.ts";
 import {
+	COLLECT_SNAPSHOT_MAX_BYTES,
 	IDLE_AFTER_SEC,
 	TRACE_SNIPPET_CHARS,
+	collectSnapshotEntry,
 	displayPath,
 	fileUri,
 	formatCollectEntry,
+	formatCollectExpanded,
 	formatDuration,
 	formatInlineArtifact,
 	formatLaneInspector,
@@ -358,6 +361,54 @@ check(
 		const withText = formatLaneInspector({ ...inspBase, status: st({}) }, (p) => p);
 		return !noTools.includes("trace:") && !noTools.includes("last text") && withText.includes("last text: done second line");
 	})(),
+);
+
+
+// --- expandable collect blocks ------------------------------------------------
+
+check(
+	"snapshot: under the cap stays whole and unflagged",
+	(() => {
+		const e = collectSnapshotEntry("docs", "/w/w-docs.md", "small answer\n");
+		return e.content === "small answer\n" && e.truncated === false && e.name === "docs" && e.artifact === "/w/w-docs.md";
+	})(),
+);
+check(
+	"snapshot: over the cap cuts at the last complete character within 16 kB",
+	(() => {
+		const e = collectSnapshotEntry("docs", "/w/w-docs.md", "中".repeat(6000)); // 18 000 bytes
+		return (
+			e.truncated === true &&
+				Buffer.byteLength(e.content, "utf8") <= COLLECT_SNAPSHOT_MAX_BYTES &&
+				Buffer.byteLength(e.content, "utf8") % 3 === 0 && // whole characters only
+				!e.content.includes("\uFFFD")
+		);
+	})(),
+);
+check(
+	"expanded block: per-lane header + content, truncation note, blank-line separated",
+	(() => {
+		const out = formatCollectExpanded([
+			collectSnapshotEntry("docs", "/w/w-docs.md", "answer one\n"),
+			collectSnapshotEntry("search", "/w/w-search.md", "中".repeat(6000)),
+		]);
+		return (
+			out.startsWith("**docs** — /w/w-docs.md\n\nanswer one") &&
+			out.includes("**search** — /w/w-search.md *(truncated at 16 kB)*") &&
+			out.includes("\n\n**search**")
+		);
+	})(),
+	(() => {
+		const out = formatCollectExpanded([
+			collectSnapshotEntry("docs", "/w/w-docs.md", "answer one\n"),
+			collectSnapshotEntry("search", "/w/w-search.md", "中".repeat(6000)),
+		]);
+		return `${out.slice(0, 80)}…`;
+	})(),
+);
+check(
+	"expanded block: an empty snapshot says so instead of rendering nothing",
+	formatCollectExpanded([]) === "_nothing collected — every lane was refused_",
 );
 
 console.log(failures === 0 ? "\nall passed" : `\n${failures} FAILED`);

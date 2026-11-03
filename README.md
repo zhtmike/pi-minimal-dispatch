@@ -85,7 +85,15 @@ A real session:
 The ceremony: *write briefs → `dispatch` → `wait` (or poll `status`) →
 `collect` → `release`*. `dispatch` never blocks; waiting is an explicit,
 bounded `wait` call that returns the status table the moment every lane
-is `settled`/`failed` — no sleep-then-poll guessing. `release` deletes exactly
+is `settled`/`failed` — no sleep-then-poll guessing. In the TUI, a
+`collect` result is expandable (ctrl+o / click): the collapsed line is
+the collect text as-is; the expanded block markdown-renders each lane's
+artifact from a snapshot taken at collect time (capped at 16 kB per
+lane) — the block stays honest even after `release` deletes the files.
+That snapshot rides the result's `details` channel, which never reaches
+the model but is persisted into the session transcript — repeated
+`collect` calls repeat the snapshot; nothing is read from disk to
+render it. `release` deletes exactly
 the wave's own files and refuses unsettled, foreign-owned, and unconsumed
 waves (a spawned lane's events transcript without its collect artifact —
 collect first; see [Recovering partial work](docs/api.md#recovering-partial-work)) — a

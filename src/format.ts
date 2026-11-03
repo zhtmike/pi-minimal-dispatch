@@ -46,6 +46,15 @@ export function formatCollectEntry(entry: CollectEntry, inlineMaxBytes: number):
 	return `${line}\n${formatInlineArtifact(entry.content, entry.artifact, inlineMaxBytes)}`;
 }
 
+/** Cut at the last complete character within `maxBytes` — never a split multibyte character. */
+function cutToByteBoundary(content: string, maxBytes: number): { text: string; totalBytes: number; truncated: boolean } {
+	const buf = Buffer.from(content, "utf8");
+	if (buf.length <= maxBytes) return { text: content, totalBytes: buf.length, truncated: false };
+	let cut = maxBytes;
+	while (cut > 0 && (buf[cut] & 0xc0) === 0x80) cut--; // back to a character boundary
+	return { text: buf.subarray(0, cut).toString("utf8"), totalBytes: buf.length, truncated: true };
+}
+
 /**
  * Fenced artifact body for inlining: the fence is one backtick longer than the
  * displayed content's longest fence run (a fixed fence would terminate early);
@@ -53,15 +62,10 @@ export function formatCollectEntry(entry: CollectEntry, inlineMaxBytes: number):
  * first N bytes — never a split multibyte character.
  */
 export function formatInlineArtifact(content: string, artifactPath: string, maxBytes: number): string {
-	const buf = Buffer.from(content, "utf8");
-	let body = content;
-	let marker = "";
-	if (buf.length > maxBytes) {
-		let cut = maxBytes;
-		while (cut > 0 && (buf[cut] & 0xc0) === 0x80) cut--; // back to a character boundary
-		body = buf.subarray(0, cut).toString("utf8");
-		marker = `${body.endsWith("\n") ? "" : "\n"}… [truncated, total ${buf.length} bytes — read ${artifactPath} for the rest]`;
-	}
+	const { text: body, totalBytes, truncated } = cutToByteBoundary(content, maxBytes);
+	const marker = truncated
+		? `${body.endsWith("\n") ? "" : "\n"}… [truncated, total ${totalBytes} bytes — read ${artifactPath} for the rest]`
+		: "";
 	// matchAll, not a spread of matches: a backtick-dense artifact overflows the spread at ~10^5 runs
 	let longest = 0;
 	for (const run of body.matchAll(/`+/g)) longest = Math.max(longest, run[0].length);
@@ -281,4 +285,37 @@ export function formatLaneInspector(l: InspectorInput, renderPath: PathRenderer)
 	}
 	if (s.state === "failed") out.push(`  transcript: ${renderPath(l.eventsPath)} · err: ${renderPath(l.errPath)}`);
 	return out.join("\n");
+}
+
+// --- expandable collect blocks (TUI details channel) --------------------------
+
+/** Per-lane artifact snapshot cap — fixed, not configurable (the channel is human-only). */
+export const COLLECT_SNAPSHOT_MAX_BYTES = 16 * 1024;
+
+/** One lane's execute-time artifact snapshot — the expanded block renders this, never disk. */
+export type CollectSnapshotEntry = {
+	name: string;
+	/** Absolute artifact path — the expanded header's reference once the artifact may be gone. */
+	artifact: string;
+	/** Artifact bytes at collect time, capped at COLLECT_SNAPSHOT_MAX_BYTES. */
+	content: string;
+	truncated: boolean;
+};
+
+/** Build one lane's snapshot: the byte cap cuts at the last complete character. */
+export function collectSnapshotEntry(name: string, artifact: string, content: string): CollectSnapshotEntry {
+	const { text, truncated } = cutToByteBoundary(content, COLLECT_SNAPSHOT_MAX_BYTES);
+	return { name, artifact, content: text, truncated };
+}
+
+/**
+ * Markdown source for the expanded collect block: one header per collected lane,
+ * its snapshot below. The renderer markdown-renders this; the snapshot (not a disk
+ * read) is what keeps the block honest after release deletes the artifact.
+ */
+export function formatCollectExpanded(snapshot: CollectSnapshotEntry[]): string {
+	if (snapshot.length === 0) return "_nothing collected — every lane was refused_";
+	return snapshot
+		.map((e) => `**${e.name}** — ${e.artifact}${e.truncated ? ` *(truncated at ${COLLECT_SNAPSHOT_MAX_BYTES / 1024} kB)*` : ""}\n\n${e.content.replace(/\n$/, "")}`)
+		.join("\n\n");
 }
