@@ -68,8 +68,11 @@ one deliberately small surface.
   foreign-owned waves.
 - **State**: derived on every call from the event stream, PID liveness, and
   the deadline — never stored, never stale. The statusbar and `/lanes` are
-  TUI conveniences over this derived state; `--print`/`--mode json` sessions
-  see status through the `lanes` tool alone.
+  TUI conveniences over this derived state; `/lanes` additionally lists
+  waves across workDirs via its own fail-soft scanner and inspects single
+  lanes from the same event streams — TUI-owned derivation, never wired to
+  the tool surface. `--print`/`--mode json` sessions see status through the
+  `lanes` tool alone.
 
 ## Non-goals
 

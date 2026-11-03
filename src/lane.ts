@@ -268,3 +268,39 @@ export function resolveLaneFilter(lanes: LaneRecord[], requested: string[] | str
 	const wanted = new Set(names);
 	return lanes.filter((l) => wanted.has(l.name));
 }
+
+// --- /lanes command surface (TUI-only; the lanes tool keeps its own contract) ---
+
+/** Parsed `/lanes` invocation: at most one wave and one lane, whitespace-split. */
+export function parseLanesArgs(args: string): { wave?: string; lane?: string } {
+	const parts = args.trim().split(/\s+/).filter((p) => p !== "");
+	if (parts.length > 2) throw new Error(`/lanes takes at most two arguments (wave, lane) — got ${parts.length}`);
+	const [wave, lane] = parts;
+	return { wave, lane };
+}
+
+/**
+ * Two-level completion over the full argument text: level 1 filters wave slugs,
+ * level 2 lane slugs of the selected wave via `laneNamesOf`. A trailing space
+ * already commits level 1 ("wave " completes lanes, empty prefix = all). Item
+ * values are the full replacement text — the host splices value over the whole
+ * argument span.
+ */
+export function lanesCompletions(
+	argText: string,
+	waveSlugs: string[],
+	laneNamesOf: (wave: string) => string[],
+): Array<{ value: string; label: string }> {
+	const parts = argText.split(/\s+/);
+	if (parts.length > 2) return [];
+	if (parts.length <= 1) {
+		return [...new Set(waveSlugs)]
+			.sort()
+			.filter((w) => w.startsWith(parts[0] ?? ""))
+			.map((w) => ({ value: w, label: w }));
+	}
+	const [wave, lanePrefix] = parts;
+	return laneNamesOf(wave)
+		.filter((n) => n.startsWith(lanePrefix))
+		.map((n) => ({ value: `${wave} ${n}`, label: n }));
+}

@@ -28,8 +28,9 @@ three in sync in the same change.
 - Keep the surface minimal: a new option, state, or action must justify itself
   against the README's contract or be cut. No queueing, no steering, no fleet
   UI — those are non-goals by design (the statusbar line — running/idle/
-  overdue/failed badges, lone-lane telemetry — and the `/lanes` command with
-  capability-gated linked paths are the deliberate extent of the UI).
+  overdue/failed badges, lone-lane telemetry — and the three-form `/lanes`
+  inspector with capability-gated linked paths are the deliberate extent of
+  the UI).
 - Fail fast, never silently fall back: validation happens at the tool boundary
   (slugs, brief paths, deadlines); a lane's failure becomes a visible state,
   not a swallowed error.

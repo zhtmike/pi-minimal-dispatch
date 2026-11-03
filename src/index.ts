@@ -21,6 +21,7 @@ import {
 	artifactPathFor,
 	currentOwner,
 	deriveLane,
+	deriveTrace,
 	finalAssistantText,
 	manifestPathFor,
 	ownerGuard,
@@ -29,13 +30,45 @@ import {
 	psLstart,
 	readManifest,
 	releaseWave,
+	scanWaves,
 	unconsumedTranscripts,
 	waitForTerminal,
+	waveSlugsIn,
 	waveTerminal,
 	writeManifestAtomic,
 } from "./derive.ts";
-import { type PathRenderer, type StatusBarEntry, displayPath, fileUri, formatCollectEntry, formatStatusBarSummary, formatWaveStatus, formatWaveStatusTui, plainPath, suspectOf } from "./format.ts";
-import { type LaneParams, assertActionParams, assertBriefTools, assertLaneTools, assertSlugs, buildLaneArgs, laneEnv, missingBriefs, missingBriefsError, resolveExecutable, resolveLaneFilter, selectKillTargets } from "./lane.ts";
+import {
+	type PathRenderer,
+	type StatusBarEntry,
+	displayPath,
+	fileUri,
+	formatCollectEntry,
+	formatLaneInspector,
+	formatStatusBarSummary,
+	formatWaveHeader,
+	formatWaveList,
+	formatWaveStatus,
+	formatWaveStatusTui,
+	lanesUsageLine,
+	plainPath,
+	suspectOf,
+} from "./format.ts";
+import {
+	type LaneParams,
+	assertActionParams,
+	assertBriefTools,
+	assertLaneTools,
+	assertSlugs,
+	buildLaneArgs,
+	laneEnv,
+	lanesCompletions,
+	missingBriefs,
+	missingBriefsError,
+	parseLanesArgs,
+	resolveExecutable,
+	resolveLaneFilter,
+	selectKillTargets,
+} from "./lane.ts";
 
 /**
  * `Type.Unsafe` keeps the literal-union typing that `defineTool`'s TypeBox inference reads;
@@ -475,6 +508,11 @@ function trackWave(wave: string, workDir: string): void {
 	armPolling();
 }
 
+/** The scanned set: the default workDir plus every tracked wave's workDir — a custom-dir wave stays listed. */
+function scanDirs(): string[] {
+	return [...new Set([path.resolve(loadConfig().workDir), ...tracked.values()])];
+}
+
 function stopPolling(): void {
 	if (pollTimer !== null) {
 		clearInterval(pollTimer);
@@ -501,41 +539,67 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("lanes", {
-		description: "Show dispatched lane status — /lanes [wave]",
-		getArgumentCompletions: (prefix) => {
-			const hits = [...tracked.keys()].filter((w) => w.startsWith(prefix));
-			return hits.length > 0 ? hits.map((w) => ({ value: w, label: w })) : null;
+		description: "List waves / inspect lanes — /lanes [wave] [lane]",
+		getArgumentCompletions: (arg) => {
+			// Filenames only for level 1 — no derivation on the keystroke path.
+			const dirs = scanDirs();
+			const slugs = [...new Set(dirs.flatMap((d) => waveSlugsIn(d)))];
+			return lanesCompletions(arg, slugs, (wave) => {
+				const dir = tracked.get(wave) ?? dirs.find((d) => fs.existsSync(manifestPathFor(d, wave)));
+				if (dir === undefined) return [];
+				try {
+					return readManifest(dir, wave).lanes.map((l) => l.name);
+				} catch {
+					return [];
+				}
+			});
 		},
 		handler: async (args, ctx) => {
 			// The real gate (PI_HYPERLINKS, tmux probe) — plain paths wherever the terminal can't link.
 			const links = getCapabilities().hyperlinks;
 			const renderPath: PathRenderer = (p) =>
 				links ? hyperlink(displayPath(p, ctx.cwd), fileUri(p)) : plainPath(p, homedir());
-			const show = (wave: string, workDir: string) => {
-				const m = readManifest(workDir, wave);
-				const now = Date.now();
-				const lanes = m.lanes.map((l) => ({ status: deriveLane(l, now), eventsPath: l.eventsPath, errPath: l.errPath }));
-				ctx.ui.notify(formatWaveStatusTui(wave, lanes, renderPath), "info");
-			};
 			try {
-				const wave = args.trim();
-				if (wave === "") {
-					if (tracked.size === 0) {
-						ctx.ui.notify("no waves tracked this session", "info");
-						return;
-					}
-					for (const [w, workDir] of tracked) {
-						try {
-							show(w, workDir);
-						} catch {
-							// a vanished manifest must not hide the remaining waves
-						}
-					}
+				const { wave, lane } = parseLanesArgs(args);
+				if (wave === undefined) {
+					const scans = scanWaves(scanDirs(), ctx.sessionManager.getSessionId(), hostname(), Date.now());
+					ctx.ui.notify(formatWaveList(scans), "info");
 					return;
 				}
-				show(wave, tracked.get(wave) ?? path.resolve(loadConfig().workDir));
+				const dirs = scanDirs();
+				const workDir = tracked.get(wave) ?? dirs.find((d) => fs.existsSync(manifestPathFor(d, wave))) ?? dirs[0];
+				const m = readManifest(workDir, wave); // unknown wave → its error + the usage hint below
+				if (lane === undefined) {
+					const now = Date.now();
+					const lanes = m.lanes.map((l) => ({ status: deriveLane(l, now), eventsPath: l.eventsPath, errPath: l.errPath }));
+					const header = formatWaveHeader(wave, m.createdAt, lanes.map((x) => x.status), now);
+					ctx.ui.notify(`${header}\n${formatWaveStatusTui(wave, lanes, renderPath)}`, "info");
+					return;
+				}
+				const record = m.lanes.find((l) => l.name === lane);
+				if (record === undefined) {
+					throw new Error(`unknown lane '${lane}' in wave '${wave}' — valid lanes: ${m.lanes.map((l) => l.name).join(", ")}`);
+				}
+				const events = parseEvents(record.eventsPath);
+				const artifactPath = artifactPathFor(m, record);
+				const artifact =
+					fs.existsSync(artifactPath) ? { path: artifactPath, content: fs.readFileSync(artifactPath, "utf8") } : undefined;
+				ctx.ui.notify(
+					formatLaneInspector(
+						{
+							wave,
+							status: deriveLane(record, Date.now(), events),
+							trace: deriveTrace(events),
+							eventsPath: record.eventsPath,
+							errPath: record.errPath,
+							artifact,
+						},
+						renderPath,
+					),
+					"info",
+				);
 			} catch (e: any) {
-				ctx.ui.notify(e.message, "error");
+				ctx.ui.notify(`${e.message}\n${lanesUsageLine()}`, "error");
 			}
 		},
 	});

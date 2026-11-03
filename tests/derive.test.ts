@@ -7,7 +7,7 @@ import { spawn, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { type LaneRecord, type Manifest, deriveLane, finalAssistantText, pidAlive, psLstart, waveTerminal, waitForTerminal, writeManifestAtomic } from "../src/derive.ts";
+import { type LaneRecord, type Manifest, deriveLane, deriveTrace, finalAssistantText, pidAlive, psLstart, scanWaves, waveSlugsIn, waveTerminal, waitForTerminal, writeManifestAtomic } from "../src/derive.ts";
 import { parseEvents } from "../src/events.ts";
 
 let failures = 0;
@@ -401,6 +401,79 @@ writeAnyManifest();
 
 slowChild.kill("SIGKILL");
 fs.rmSync(workDir3, { recursive: true, force: true });
+
+
+// --- deriveTrace --------------------------------------------------------------
+
+{
+	const t = (id: string, name: string, extra: object = {}) => JSON.stringify({ type: "tool_execution_start", toolCallId: id, toolName: name, args: { a: id }, ...extra });
+	const end = (id: string, dur: number) => JSON.stringify({ type: "tool_execution_end", toolCallId: id, toolName: "x", durationMs: dur, result: {}, isError: false });
+	writeEvents([session, t("c1", "bash"), end("c1", 8400), t("c2", "grep"), end("c2", 120), t("c3", "read")]);
+	const trace = deriveTrace(parseEvents(eventsPath));
+	check(
+		"trace: matched pairs carry durationMs and close, the unmatched start stays in flight, args ride along",
+		trace.tools.length === 3 &&
+			trace.tools[0].name === "bash" && trace.tools[0].durationMs === 8400 && trace.tools[0].inflight === undefined &&
+			trace.tools[2].name === "read" && trace.tools[2].inflight === true && trace.tools[2].args !== undefined &&
+			trace.lastText === "",
+		JSON.stringify(trace),
+	);
+
+	const many = [session, ...Array.from({ length: 12 }, (_, i) => t(`k${i}`, `tool${i}`))];
+	writeEvents(many);
+	const trimmed = deriveTrace(parseEvents(eventsPath), 8);
+	check(
+		"trace: maxTools keeps the tail",
+		trimmed.tools.length === 8 && trimmed.tools[0].name === "tool4" && trimmed.tools[7].name === "tool11",
+		JSON.stringify(trimmed.tools.map((x) => x.name)),
+	);
+
+	writeEvents([session, turn, assistantEnd({ input: 1 }, "stop", { content: [{ type: "text", text: "final words" }] }), '{"type":"agent_settled","aborted":false}']);
+	const withText = deriveTrace(parseEvents(eventsPath));
+	check("trace: lastText is the last assistant message_end's text", withText.lastText === "final words");
+}
+
+// --- scanWaves + waveSlugsIn ---------------------------------------------------
+
+{
+	const dirA = path.join(tmp, "scanA");
+	const dirB = path.join(tmp, "scanB");
+	fs.mkdirSync(dirA, { recursive: true });
+	fs.mkdirSync(dirB, { recursive: true });
+	writeManifestAtomic({
+		version: 1, wave: "alpha", workDir: dirA, createdAt: new Date().toISOString(),
+		owner: { sid: "other", pid: deadPid, host: os.hostname(), lstart: "whenever" },
+		lanes: [{ name: "one", briefPath: "/dev/null", eventsPath: path.join(dirA, "alpha-one.events.jsonl"), errPath: path.join(dirA, "alpha-one.err"), pid: deadPid, processStart: null, startedAt: new Date().toISOString(), deadlineSec: 900, spawned: true }],
+	});
+	fs.writeFileSync(path.join(dirB, "beta-manifest.json"), "{corrupt");
+	writeManifestAtomic({
+		version: 1, wave: "gamma", workDir: dirB, createdAt: new Date().toISOString(),
+		owner: { sid: "self", pid: process.pid, host: os.hostname(), lstart: psLstart(process.pid) },
+		lanes: [],
+	});
+
+	check(
+		"waveSlugsIn: manifest filenames only",
+		JSON.stringify(waveSlugsIn(dirA)) === JSON.stringify(["alpha"]) && JSON.stringify(waveSlugsIn(dirB).sort()) === JSON.stringify(["beta", "gamma"]),
+	);
+	check("waveSlugsIn: a missing dir is no suggestions, not a throw", waveSlugsIn(path.join(tmp, "nope")).length === 0);
+
+	const scans = scanWaves([dirA, dirB, dirA], "self", os.hostname(), Date.now());
+	const alpha = scans.find((s) => s.wave === "alpha")!;
+	const beta = scans.find((s) => s.wave === "beta")!;
+	const gamma = scans.find((s) => s.wave === "gamma")!;
+	check(
+		"scanWaves: dead owner flags prior session, own wave does not, dir dedupe holds",
+		scans.length === 3 && alpha.ok && alpha.priorSession === true && alpha.statuses.length === 1 &&
+			gamma.ok && gamma.priorSession === false,
+		JSON.stringify(scans.map((s) => ({ w: s.wave, ok: s.ok, prior: s.ok ? s.priorSession : undefined }))),
+	);
+	check(
+		"scanWaves: a corrupt manifest is listed with its error, never dropped",
+		beta.ok === false && typeof beta.error === "string" && beta.error.length > 0,
+		JSON.stringify(beta),
+	);
+}
 
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(failures === 0 ? "\nall passed" : `\n${failures} FAILED`);

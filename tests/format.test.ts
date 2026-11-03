@@ -4,7 +4,27 @@
  */
 
 import type { LaneStatus } from "../src/derive.ts";
-import { IDLE_AFTER_SEC, displayPath, fileUri, formatCollectEntry, formatInlineArtifact, formatLaneLine, formatStatusBarSummary, formatWaveStatusTui, plainPath, suspectOf } from "../src/format.ts";
+import { type TraceSummary, type WaveScan } from "../src/derive.ts";
+import {
+	IDLE_AFTER_SEC,
+	TRACE_SNIPPET_CHARS,
+	displayPath,
+	fileUri,
+	formatCollectEntry,
+	formatDuration,
+	formatInlineArtifact,
+	formatLaneInspector,
+	formatMillis,
+	formatLaneLine,
+	formatStatusBarSummary,
+	formatWaveHeader,
+	formatWaveList,
+	formatWaveStatusTui,
+	lanesUsageLine,
+	plainPath,
+	snippet,
+	suspectOf,
+} from "../src/format.ts";
 
 let failures = 0;
 function check(name: string, cond: boolean, detail?: string) {
@@ -239,6 +259,105 @@ check(
 check(
 	"collect line: suspect without a cause renders the bare [SUSPECT] tag",
 	formatCollectEntry({ ...okEntry, suspect: true }, 0) === "  docs: /w/w-docs.md [SUSPECT] stop:stop",
+);
+
+
+// --- /lanes inspector surfaces ---------------------------------------------
+
+check(
+	"snippet: single-lined and capped at the fixed width, strings unquoted",
+	snippet({ command: "a\nb c" }) === '{"command":"a\\nb c"}' &&
+		snippet("plain text") === "plain text" &&
+		snippet("x".repeat(TRACE_SNIPPET_CHARS + 10)).length === TRACE_SNIPPET_CHARS + 1 &&
+		snippet("x".repeat(TRACE_SNIPPET_CHARS + 10)).endsWith("…"),
+);
+check(
+	"millis: sub-second precision kept for tool durations",
+	formatMillis(840) === "840ms" && formatMillis(8400) === "8.4s" && formatMillis(62_000) === "1m02s",
+);
+check(
+	"duration: seconds, minutes+seconds, hours+minutes",
+	formatDuration(45) === "45s" && formatDuration(750) === "12m30s" && formatDuration(3900) === "1h05m" && formatDuration(0) === "0s",
+);
+check("usage line: the three forms, one line", lanesUsageLine() === "usage: /lanes [wave] [lane] — list waves · inspect one wave · inspect one lane");
+
+const scanOk = (wave: string, over: Partial<Extract<WaveScan, { ok: true }>> = {}): WaveScan =>
+	({ ok: true, wave, workDir: "/w", statuses: [st({ name: "a" }), st({ state: "settled", name: "b" })], priorSession: false, createdAt: new Date().toISOString(), ...over });
+check(
+	"wave list: lane count + aggregate state, prior-session tag, corrupt manifest listed, usage line last",
+	(() => {
+		const out = formatWaveList([
+			scanOk("alpha"),
+			scanOk("beta", { priorSession: true, statuses: [st({ state: "failed", cause: "deadline", name: "a" })] }),
+			{ ok: false, wave: "broken", workDir: "/w", error: "Unexpected token" },
+		]);
+		return (
+			out.includes("alpha — 2 lanes · 1 running · 1 settled") &&
+			out.includes("beta (prior session) — 1 lane · 1 failed") &&
+			out.includes("broken — manifest error: Unexpected token") &&
+			out.endsWith(lanesUsageLine())
+		);
+	})(),
+	formatWaveList([scanOk("alpha")]),
+);
+check(
+	"wave list: empty scan says no waves, still ends with the usage line",
+	formatWaveList([]) === `waves:\n  no waves found\n${lanesUsageLine()}`,
+);
+check(
+	"wave header: wall clock since dispatch + pure usage sums over statuses",
+	formatWaveHeader("w", new Date(Date.now() - 750_000).toISOString(), [st({ name: "a" }), st({ name: "b" })], Date.now()).includes("12m30s since dispatch · 2 lanes · tok 20in/4out · $0.0020"),
+	formatWaveHeader("w", new Date(Date.now() - 750_000).toISOString(), [st({ name: "a" }), st({ name: "b" })], Date.now()),
+);
+
+const inspTrace: TraceSummary = {
+	tools: [
+		{ name: "bash", args: { command: "npm test" }, durationMs: 8400 },
+		{ name: "read", args: { path: "/x" }, inflight: true },
+	],
+	lastText: "done\nsecond line",
+};
+const inspBase = { wave: "w", eventsPath: "/w/w-a.events.jsonl", errPath: "/w/w-a.err", trace: inspTrace };
+check(
+	"inspector settled+artifact: header, trace with durations/in-flight, artifact link and full content",
+	(() => {
+		const out = formatLaneInspector({ ...inspBase, status: st({ state: "settled", stopReason: "stop", model: "zai/glm-4.6", thinkingLevel: "high", turns: 3, lastEventAgeSec: 5 }), artifact: { path: "/w/w-a.md", content: "the answer\n" } }, (p) => `<${p}>`);
+		return (
+			out.startsWith("lane 'lane' in wave 'w' — settled") &&
+			out.includes("glm-4.6 think:high · 3 turns · tok 10in/2out · $0.0010 · stop:stop") &&
+			out.includes("bash {\"command\":\"npm test\"} — 8.4s") &&
+			out.includes("read {\"path\":\"/x\"} — in flight") &&
+			out.includes("artifact: </w/w-a.md> (11 B)") &&
+			out.includes("    the answer")
+		);
+	})(),
+);
+check(
+	"inspector settled uncollected: last-text preview and the not-yet-collected line",
+	(() => {
+		const out = formatLaneInspector({ ...inspBase, status: st({ state: "settled", stopReason: "stop" }) }, (p) => p);
+		return out.includes("last text: done second line") && out.includes("artifact: not yet collected");
+	})(),
+);
+check(
+	"inspector failed: cause in the header, err tail indented, transcript/err paths, no artifact line",
+	(() => {
+		const out = formatLaneInspector({ ...inspBase, status: st({ state: "failed", cause: "crashed", errTail: "boom\nline2" }) }, (p) => `<${p}>`);
+		return (
+			out.startsWith("lane 'lane' in wave 'w' — failed (crashed)") &&
+			out.includes("  err: boom\n    line2") &&
+			out.includes("transcript: </w/w-a.events.jsonl> · err: </w/w-a.err>") &&
+			!out.includes("artifact:")
+		);
+	})(),
+);
+check(
+	"inspector running: no settled/failed-only bits, empty trace renders nothing, preview present when text exists",
+	(() => {
+		const noTools = formatLaneInspector({ ...inspBase, status: st({}), trace: { tools: [], lastText: "" } }, (p) => p);
+		const withText = formatLaneInspector({ ...inspBase, status: st({}) }, (p) => p);
+		return !noTools.includes("trace:") && !noTools.includes("last text") && withText.includes("last text: done second line");
+	})(),
 );
 
 console.log(failures === 0 ? "\nall passed" : `\n${failures} FAILED`);
