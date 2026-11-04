@@ -11,7 +11,8 @@ format, one derivation core. Read [README.md](README.md) first, then
 When code and docs disagree, that is a bug in one of
 them; fix the disagreement, not just the code. The tool schemas in
 `src/index.ts` are the model-facing half of the same contract — keep the
-three in sync in the same change.
+three in sync in the same change. Schemas carry constraints, docs/api.md
+carries mechanics and recipes — schema prose never duplicates the reference.
 
 ## Layout
 
@@ -36,7 +37,8 @@ three in sync in the same change.
   block are the deliberate extent of the UI).
 - Fail fast, never silently fall back: validation happens at the tool boundary
   (slugs, brief paths, deadlines); a lane's failure becomes a visible state,
-  not a swallowed error.
+  not a swallowed error; a refusal names its fix — the exact call or config
+  change that unblocks.
 - Detached spawns must stay detached: lanes outlive the dispatcher, deadlines
   hold parentless via the `timeout` wrapper, and a reused PID is never
   signaled (start-time guard in `pidAlive`).
