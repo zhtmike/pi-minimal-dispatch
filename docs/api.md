@@ -29,7 +29,9 @@ the leash. Events stream to `<workDir>/<wave>-<name>.events.jsonl`.
 | `workDir` | string? | `workDir` config (`.pi/work`) | Directory for manifest, events, and artifacts |
 
 **Result:** text summary plus `structuredContent` — `{ wave, manifestPath, lanes[] }`
-with each lane's pid, paths, and deadline. The manifest also records the
+with each lane's pid, paths, and deadline. The text ends with a one-line
+`[next: lanes(wave=…, action='wait') …]` hint — the blocking call that replaces
+status polling. The manifest also records the
 dispatcher's `owner` — `{ sid, pid, host, lstart }` — which the `kill` and
 `release` actions use as their ownership guard. Spawned lanes stream events
 immediately; a lane that failed to spawn appears as `SPAWN ERROR: …`.
@@ -98,7 +100,9 @@ fresh one after the dispatcher exited — sees the same truth.
 A parameter its action does not accept (`lane`, `waitMode`, `inlineMaxBytes`)
 is rejected with an error naming the actions that take it — never silently
 ignored. (`waitSec` outside `wait` keeps its legacy silent-ignore: a
-compatibility carve-out, not the pattern.)
+compatibility carve-out, not the pattern.) An unknown `wave` errors with the
+expected manifest path and a pointer to list live waves
+(`ls <workDir>/*-manifest.json`).
 
 ### `status`
 

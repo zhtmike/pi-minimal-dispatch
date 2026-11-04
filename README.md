@@ -71,6 +71,7 @@ A real session:
     docs: pid 99015 (deadline 900s)
     review: pid 99016 (deadline 900s)
   manifest: /abs/path/to/.pi/work/survey-manifest.json
+  [next: lanes(wave='survey', action='wait') — blocks until every lane settles or fails; waitSec caps the hold; action='status' to peek]
 
 > lanes     wave="survey" action="wait"
   docs [glm-5.3-flash] · settled · 2 turns · tok 5703in/90out, $0.0009 · stop:stop · last 0.8s ago

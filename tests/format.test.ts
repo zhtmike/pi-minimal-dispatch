@@ -11,6 +11,7 @@ import {
 	TRACE_SNIPPET_CHARS,
 	collectSnapshotEntry,
 	displayPath,
+	dispatchNextHint,
 	fileUri,
 	formatCollectEntry,
 	formatCollectExpanded,
@@ -60,6 +61,15 @@ check(
 	formatStatusBarSummary([st({ state: "settled" }), st({ state: "failed", cause: "deadline", name: "b" })]) === "lanes: 1 failed (deadline) · 1 settled" &&
 		formatStatusBarSummary([st({ state: "settled" }), st({ state: "settled", name: "b" })]) === undefined &&
 		formatStatusBarSummary([]) === undefined,
+);
+
+// --- dispatch output hint ---------------------------------------------------
+
+const hint = dispatchNextHint("survey");
+check(
+	"dispatch hint: one bracketed line naming the wave and wait",
+	hint.startsWith("[next: lanes(wave='survey', action='wait')") && hint.endsWith("]") && !hint.includes("\n"),
+	hint,
 );
 
 // --- statusbar: badges, telemetry, composition -------------------------------

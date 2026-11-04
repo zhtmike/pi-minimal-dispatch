@@ -43,6 +43,7 @@ import {
 	type StatusBarEntry,
 	collectSnapshotEntry,
 	displayPath,
+	dispatchNextHint,
 	fileUri,
 	formatCollectExpanded,
 	formatCollectEntry,
@@ -71,6 +72,7 @@ import {
 	resolveExecutable,
 	resolveLaneFilter,
 	selectKillTargets,
+	waveClaimedError,
 } from "./lane.ts";
 
 /**
@@ -146,15 +148,14 @@ const dispatchTool = defineTool({
 	name: "dispatch",
 	label: "Dispatch lanes",
 	description:
-		"Spawn detached sub-agent lanes (fresh pi processes) for a wave and return immediately. Each lane runs " +
-		"`timeout -k <graceSec> <deadlineSec> pi --mode json --no-session -ns [flags] @<briefPath>` in its own " +
-		"process group, streaming JSON events to <workDir>/<wave>-<name>.events.jsonl. Lanes survive this " +
-		"session's exit. Write briefs first — one brief file per lane is the lane's entire prompt; " +
-		"lanes run in fresh processes (JSON event mode, no session) with skills unloaded (-ns), " +
-		"a read-only tool default, MCP reach only via a route named in tools (else set mcp: false), " +
-		"and never the dispatch tool itself. Every lane in the call is " +
+		"Spawn detached sub-agent lanes (fresh pi processes) for a wave and return immediately; " +
+		"lanes survive this session's exit. Each lane runs its brief file in its own process group, " +
+		"streaming events to <workDir>/<wave>-<name>.events.jsonl. " +
+		"Write briefs first — one brief file per lane is the lane's entire prompt; " +
+		"lanes run with skills unloaded, a read-only tool default, MCP reach only via a route named in tools " +
+		"(else set mcp: false), and never the dispatch tool itself. Every lane in the call is " +
 		"spawned — the caller bounds the wave. " +
-		"Then poll with the lanes tool; collect artifacts when settled, release the wave when done.",
+		"Then wait with the lanes tool (or poll status); collect artifacts when settled, release the wave when done.",
 	parameters: Type.Object({
 		wave: Type.String({ description: "Wave slug (kebab-case, max 64 chars); must not already exist in workDir" }),
 		lanes: Type.Array(
@@ -164,7 +165,7 @@ const dispatchTool = defineTool({
 				model: Type.Optional(Type.String({ description: "Pin a model id for this lane; omitted: pi's configured default model — not necessarily the dispatcher session's active model. Accepts pi's `id:thinking` suffix (e.g. 'zai/glm-4.6:high')" })),
 				thinking: Type.Optional(stringEnum(["off", "minimal", "low", "medium", "high", "xhigh", "max"], { description: "Pin a thinking level (pi's --thinking vocabulary); wins over any `:level` suffix in model. pi clamps the level to the model's capabilities — status reports the actual level" })),
 				deadlineSec: Type.Optional(Type.Number({ description: "Deadline leash in seconds (config default: 900)", minimum: 1 })),
-				tools: Type.Optional(Type.String({ description: "Tool allowlist for --tools; omitted: 'read,grep,find,ls' — add 'bash' when a lane must run commands (bash can still invoke git — and can write anywhere the dispatcher can: don't grant it to read-only lanes in a shared checkout; give write-capable lanes a scratch dir outside the repo). Plain names or mcp__/tool patterns only: +name/-name modifiers, shell quoting, and empty lists are rejected. With mcp enabled, MCP/web tools are reachable only through 'codemode' or 'tool_search' named here ('mcp__server__*' entries declare tools directly only for direct-exposure servers)" })),
+				tools: Type.Optional(Type.String({ description: "Tool allowlist for --tools; omitted: 'read,grep,find,ls' — add 'bash' when a lane must run commands (bash can write anywhere the dispatcher can — grant it only with cause). Plain names or mcp__/tool patterns only: +name/-name modifiers, shell quoting, and empty lists are rejected. With mcp enabled, MCP/web tools are reachable only through 'codemode' or 'tool_search' named here ('mcp__server__*' entries declare tools directly only for direct-exposure servers)" })),
 				noExtensions: Type.Optional(Type.Boolean({ description: "Pass -ne (drop extensions incl. MCP)" })),
 				mcp: Type.Optional(Type.Boolean({ description: "Set false to pass --no-mcp (no MCP servers connect). Servers connecting alone grants no reach: with mcp enabled, tools must name 'codemode' or 'tool_search' or dispatch rejects the lane" })),
 			}),
@@ -200,7 +201,7 @@ const dispatchTool = defineTool({
 		try {
 			claimFd = fs.openSync(manifestPath, "wx");
 		} catch (e: any) {
-			if (e.code === "EEXIST") throw new Error(`wave '${params.wave}' already exists (${manifestPath})`);
+			if (e.code === "EEXIST") throw new Error(waveClaimedError(params.wave, manifestPath));
 			throw e;
 		}
 
@@ -254,7 +255,7 @@ const dispatchTool = defineTool({
 			content: [
 				{
 					type: "text",
-					text: `wave '${params.wave}' dispatched — ${manifest.lanes.filter((l) => l.spawned).length}/${manifest.lanes.length} lanes spawned\n${lines.join("\n")}\nmanifest: ${manifestPath}`,
+					text: `wave '${params.wave}' dispatched — ${manifest.lanes.filter((l) => l.spawned).length}/${manifest.lanes.length} lanes spawned\n${lines.join("\n")}\nmanifest: ${manifestPath}\n${dispatchNextHint(params.wave)}`,
 				},
 			],
 			structuredContent: { wave: params.wave, manifestPath, lanes: manifest.lanes },
@@ -274,8 +275,7 @@ const lanesTool = defineTool({
 		"re-deriving at the pollMs cadence, until every lane is settled/failed (or the first one, with " +
 		"waitMode:'any') or waitSec (default 300, " +
 		"max 3600) elapses — then return the status table; replaces blind sleep-then-status polling. " +
-		"action=kill: SIGTERM the lane process group " +
-		"(SIGKILL after the configured grace), start-time guarded; refuses waves owned by a live foreign session; " +
+		"action=kill: SIGTERM the lane process group (escalating to SIGKILL after a grace), start-time guarded; refuses waves owned by a live foreign session; " +
 		"pass lane:[names] to signal only those lanes — untargeted lanes are untouched. " +
 		"action=collect: write each finished lane's final assistant " +
 		"message to <wave>-<name>.md (suspect-flagged on failure/empty/non-clean stopReason); a refusal " +
@@ -288,9 +288,7 @@ const lanesTool = defineTool({
 		"briefs/events/err, collect artifacts, and the manifest; refuses unsettled, foreign-owned, and " +
 		"unconsumed waves (a spawned lane's events file present without its collect artifact — collect " +
 		"first; a human may delete the files by hand). " +
-		"Discover waves: ls <workDir>/*-manifest.json. " +
-		"A slow lane is diagnosed from its tail: bash tail -c 2000 <wave>-<name>.events.jsonl — " +
-		"tool_execution_start/_end pair by toolCallId (an unmatched start is an in-flight tool); agent_settled marks the end.",
+		"Discover waves: ls <workDir>/*-manifest.json.",
 	parameters: Type.Object({
 		wave: Type.String({ description: "Wave slug" }),
 		action: Type.Optional(stringEnum(["status", "wait", "kill", "collect", "release"])),

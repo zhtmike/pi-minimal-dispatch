@@ -97,6 +97,14 @@ export function formatWaveStatus(wave: string, statuses: LaneStatus[]): string {
 	return `wave '${wave}':\n${statuses.map(formatLaneLine).join("\n")}`;
 }
 
+/** One bracketed line appended to dispatch output: the blocking call that replaces status polling. */
+export function dispatchNextHint(wave: string): string {
+	return (
+		`[next: lanes(wave='${wave}', action='wait') — blocks until every lane settles or fails; ` +
+		"waitSec caps the hold; action='status' to peek]"
+	);
+}
+
 // --- statusbar footer -------------------------------------------------------
 
 /** Footer entry: a lane status tagged with its wave — the tick knows the manifest. */
