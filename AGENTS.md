@@ -20,6 +20,9 @@ three in sync in the same change.
 - `src/events.ts` — typed lane event-stream parsing (`pi --mode json` JSONL)
 - `src/derive.ts` — manifest registry, process liveness, state derivation; pure Node builtins, importable without the pi host
 - `src/format.ts` — presentation formatters shared by tool, command, and statusbar
+- `src/lane.ts` — the lane contract: slug/brief/tools validation, executable
+  resolution, spawn argv, kill-target selection, `lanes` action params, `/lanes`
+  arg parsing + completions; pure Node builtins, importable without the pi host
 - `docs/` — `api.md` (tool reference), `design.md` (positioning, mechanics, non-goals)
 - `tests/*.test.ts` — plain `node` scripts, no framework, covering the pure cores (config, derive, format, lane, release)
 
@@ -52,8 +55,11 @@ node tests/lane.test.ts       # must pass
 node tests/release.test.ts    # must pass
 ```
 
-The pi host API surface used here (`defineTool`, `ExtensionAPI`,
-`registerTool`, `Type` from `typebox`; plus a local `stringEnum` helper in
-place of pi-ai's) is verified
-against the installed pi package —
+The pi host API surface used here — from `@earendil-works/pi-coding-agent`:
+`defineTool`, `getMarkdownTheme`, the `ExtensionAPI`/`AgentToolResult`
+types; on `ExtensionAPI`: `registerTool`, `registerCommand`, `session_start`/
+`session_shutdown`, `ctx.ui.setStatus`/`notify`; `Type` from `typebox`;
+`getCapabilities`/`hyperlink`/`Markdown`/
+`Text` from `pi-tui`; plus a local `stringEnum` helper in place of pi-ai's — is
+verified against the installed pi package;
 check a current pi checkout before changing imports.
