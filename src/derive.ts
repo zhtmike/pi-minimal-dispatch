@@ -80,7 +80,7 @@ export function manifestPathFor(workDir: string, wave: string): string {
 /** Read and parse a wave manifest; throws with the path when absent or invalid. */
 export function readManifest(workDir: string, wave: string): Manifest {
 	const p = manifestPathFor(workDir, wave);
-	if (!fs.existsSync(p)) throw new Error(`unknown wave '${wave}' (no manifest at ${p})`);
+	if (!fs.existsSync(p)) throw new Error(`unknown wave '${wave}' (no manifest at ${p}) — list live waves: ls ${path.dirname(p)}/*-manifest.json`);
 	return JSON.parse(fs.readFileSync(p, "utf8")) as Manifest;
 }
 

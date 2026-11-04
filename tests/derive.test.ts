@@ -7,7 +7,7 @@ import { spawn, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { type LaneRecord, type Manifest, deriveLane, deriveTrace, finalAssistantText, pidAlive, psLstart, scanWaves, waveSlugsIn, waveTerminal, waitForTerminal, writeManifestAtomic } from "../src/derive.ts";
+import { type LaneRecord, type Manifest, deriveLane, deriveTrace, finalAssistantText, pidAlive, psLstart, readManifest, scanWaves, waveSlugsIn, waveTerminal, waitForTerminal, writeManifestAtomic } from "../src/derive.ts";
 import { parseEvents } from "../src/events.ts";
 
 let failures = 0;
@@ -252,6 +252,20 @@ const manifest: Manifest = { version: 1, wave: "w", workDir: workDir2, createdAt
 const writeWEvents = (lines: string[]) => fs.writeFileSync(wEvents, lines.join("\n") + "\n");
 const writeWManifest = () => writeManifestAtomic(manifest);
 fs.writeFileSync(wErr, "");
+
+// --- readManifest: the unknown-wave refusal points at where waves live ------
+
+try {
+	readManifest(workDir2, "never-existed");
+	check("readManifest: unknown wave throws", false);
+} catch (e) {
+	const msg = String(e);
+	check(
+		"readManifest: unknown wave names the path and lists live waves",
+		msg.includes("unknown wave 'never-existed'") && msg.includes("no manifest at") && msg.includes("ls ") && msg.includes("*-manifest.json"),
+		msg,
+	);
+}
 
 // Running: session header only.
 writeWEvents([JSON.stringify({ type: "session", id: "s" })]);

@@ -63,6 +63,15 @@ export function missingBriefsError(missing: string[]): string {
 	);
 }
 
+/** The dispatch-time refusal for an already-claimed slug: slugs stay claimed until release. */
+export function waveClaimedError(wave: string, manifestPath: string): string {
+	return (
+		`wave '${wave}' already exists (${manifestPath}) — the slug stays claimed until release: ` +
+		`lanes(wave='${wave}', action='status') shows the wave, action='release' frees the slug once settled and collected, ` +
+		"else dispatch under a new slug"
+	);
+}
+
 /** Resolve an executable on PATH; a directory on PATH is not an executable. */
 export function resolveExecutable(name: string): string {
 	for (const dir of (process.env.PATH ?? "").split(path.delimiter)) {
@@ -76,7 +85,7 @@ export function resolveExecutable(name: string): string {
 			// keep scanning
 		}
 	}
-	throw new Error(`executable '${name}' not found on PATH`);
+	throw new Error(`executable '${name}' not found on PATH — install it, or set config's piBin/timeoutBin to its PATH-visible name (macOS coreutils: gtimeout)`);
 }
 
 /** Parse a `tools` string exactly as pi parses `--tools`: split on commas, trim, drop empties. */

@@ -23,6 +23,7 @@ import {
 	resolveLaneFilter,
 	selectKillTargets,
 	toolEntries,
+	waveClaimedError,
 } from "../src/lane.ts";
 import type { LaneParams } from "../src/lane.ts";
 import type { LaneRecord } from "../src/derive.ts";
@@ -77,6 +78,20 @@ check(
 	refusal,
 );
 
+// --- waveClaimedError ------------------------------------------------------
+
+const claimed = waveClaimedError("w-1", "/x/w-1-manifest.json");
+check(
+	"claimed slug: cause names wave and manifest path",
+	claimed.startsWith("wave 'w-1' already exists (/x/w-1-manifest.json)"),
+	claimed,
+);
+check(
+	"claimed slug: remedy names status, release, and the new-slug escape",
+	claimed.includes("action='status'") && claimed.includes("action='release'") && claimed.includes("new slug"),
+	claimed,
+);
+
 // --- resolveExecutable ------------------------------------------------------
 
 const bin = path.join(tmp, "bin");
@@ -91,6 +106,7 @@ check("executable: found and executable", resolveExecutable("good-bin").endsWith
 check("executable: a directory on PATH is not an executable", throwsWith(() => resolveExecutable("dir-bin"), "not found"));
 check("executable: non-executable file is not found", throwsWith(() => resolveExecutable("noexec-bin"), "not found"));
 check("executable: absent name errors naming it", throwsWith(() => resolveExecutable("definitely-absent"), "'definitely-absent'"));
+check("executable: not-found names the config escape", throwsWith(() => resolveExecutable("definitely-absent"), "piBin/timeoutBin"));
 if (prevPath === undefined) delete process.env.PATH;
 else process.env.PATH = prevPath;
 
