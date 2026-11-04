@@ -64,6 +64,7 @@ import {
 	assertLaneTools,
 	assertSlugs,
 	buildLaneArgs,
+	defaultWaveOf,
 	laneEnv,
 	lanesCompletions,
 	missingBriefs,
@@ -553,7 +554,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("lanes", {
-		description: "List waves / inspect lanes — /lanes [wave] [lane]",
+		description: "Inspect waves/lanes — /lanes [wave] [lane]",
 		getArgumentCompletions: (arg) => {
 			// Filenames only for level 1 — no derivation on the keystroke path.
 			const dirs = scanDirs();
@@ -574,14 +575,22 @@ export default function (pi: ExtensionAPI) {
 			const renderPath: PathRenderer = (p) =>
 				links ? hyperlink(displayPath(p, ctx.cwd), fileUri(p)) : plainPath(p, homedir());
 			try {
-				const { wave, lane } = parseLanesArgs(args);
+				const { wave: parsedWave, lane } = parseLanesArgs(args);
+				let wave = parsedWave;
+				let scanDir: string | undefined;
 				if (wave === undefined) {
+					// The lone readable wave skips the wave ceremony: bare /lanes is its table.
 					const scans = scanWaves(scanDirs(), ctx.sessionManager.getSessionId(), hostname(), Date.now());
-					ctx.ui.notify(formatWaveList(scans), "info");
-					return;
+					const lone = defaultWaveOf(scans);
+					if (lone === undefined) {
+						ctx.ui.notify(formatWaveList(scans), "info");
+						return;
+					}
+					wave = lone.wave;
+					scanDir = lone.workDir;
 				}
 				const dirs = scanDirs();
-				const workDir = tracked.get(wave) ?? dirs.find((d) => fs.existsSync(manifestPathFor(d, wave))) ?? dirs[0];
+				const workDir = scanDir ?? tracked.get(wave) ?? dirs.find((d) => fs.existsSync(manifestPathFor(d, wave))) ?? dirs[0];
 				const m = readManifest(workDir, wave); // unknown wave → its error + the usage hint below
 				if (lane === undefined) {
 					const now = Date.now();

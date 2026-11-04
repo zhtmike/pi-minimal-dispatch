@@ -286,7 +286,9 @@ Three forms:
   session's tracked workDirs: lane count, aggregate state, a
   `(prior session)` tag on waves from a dead or unidentifiable
   dispatcher, corrupt manifests listed with their error. Ends with the
-  grammar line.
+  grammar line. With exactly one readable wave scanned, bare `/lanes`
+  skips the listing and shows that wave's table (prior-session waves
+  included — any session may re-adopt).
 - `/lanes <wave>` — the per-lane table under a wave header (wall clock
   since dispatch, summed tokens and cost).
 - `/lanes <wave> <lane>` — single-lane inspector by state: settled lanes
@@ -302,15 +304,19 @@ paths, clickable when the terminal proves capable (pi's own OSC 8 gate —
 opens the absolute `file://` target — it works exactly where the
 terminal's machine can reach the file, so under SSH+tmux the paths are
 for copy-paste. Completion is two-level: wave slugs first, then lane
-slugs of the selected wave (type letters to filter, Tab to apply). Each
+slugs of the selected wave. The list follows letters and Space while you
+type; Tab or Enter applies the highlighted row (Tab can never open the
+list — the host routes it to command-name or file completion); after an
+apply, type a letter or Backspace to reopen, and if Tab ever showed file
+paths, Esc once then a letter returns to wave/lane completion. Each
 table line tags the lane with its model — short id (provider prefix
 dropped), `think:<level>` appended when set; `[default]` for a no-pin
 lane that hasn't started generating.
 
-Worked example: `dispatch` a two-lane scout wave; bare `/lanes` lists
-`scouts — 2 lanes · 2 running`; once the footer shows them settled,
-`/lanes scouts` confirms both lanes and `/lanes scouts docs` reads the
-artifact in the TUI — zero model tokens.
+Worked example: `dispatch` a two-lane scout wave; with no other wave
+around, bare `/lanes` shows the scout table itself; once the footer
+shows the lanes settled, `/lanes scouts docs` reads the artifact in the
+TUI — zero model tokens.
 
 ## Configuration
 

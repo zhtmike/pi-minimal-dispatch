@@ -7,7 +7,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { DispatchConfig } from "./config.ts";
-import type { LaneRecord } from "./derive.ts";
+import type { LaneRecord, WaveScan } from "./derive.ts";
 
 export const SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
@@ -290,26 +290,37 @@ export function parseLanesArgs(args: string): { wave?: string; lane?: string } {
 
 /**
  * Two-level completion over the full argument text: level 1 filters wave slugs,
- * level 2 lane slugs of the selected wave via `laneNamesOf`. A trailing space
- * already commits level 1 ("wave " completes lanes, empty prefix = all). Item
- * values are the full replacement text — the host splices value over the whole
- * argument span.
+ * level 2 lane slugs of the selected wave via `laneNamesOf`. Whitespace runs
+ * collapse and leading blanks trim; a trailing space is the level-1 commit
+ * ("wave " completes lanes, empty prefix = all). Item values are the full
+ * replacement text, wave values ending in the separator — the host splices
+ * value over the whole argument span and appends nothing.
  */
 export function lanesCompletions(
 	argText: string,
 	waveSlugs: string[],
 	laneNamesOf: (wave: string) => string[],
 ): Array<{ value: string; label: string }> {
-	const parts = argText.split(/\s+/);
+	const parts = argText.replace(/\s+/g, " ").trimStart().split(" ");
 	if (parts.length > 2) return [];
 	if (parts.length <= 1) {
 		return [...new Set(waveSlugs)]
 			.sort()
-			.filter((w) => w.startsWith(parts[0] ?? ""))
-			.map((w) => ({ value: w, label: w }));
+			.filter((w) => w.startsWith(parts[0]))
+			.map((w) => ({ value: `${w} `, label: w }));
 	}
 	const [wave, lanePrefix] = parts;
 	return laneNamesOf(wave)
 		.filter((n) => n.startsWith(lanePrefix))
 		.map((n) => ({ value: `${wave} ${n}`, label: n }));
+}
+
+/**
+ * Bare `/lanes` default: the lone readable wave's scan — prior-session waves
+ * included (any session may re-adopt). Undefined keeps the wave-list rendering;
+ * the caller renders the wave table from the scan's own workDir, no re-find.
+ */
+export function defaultWaveOf(scans: WaveScan[]): { wave: string; workDir: string } | undefined {
+	if (scans.length !== 1 || !scans[0].ok) return undefined;
+	return { wave: scans[0].wave, workDir: scans[0].workDir };
 }

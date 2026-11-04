@@ -14,6 +14,7 @@ import {
 	assertSlugs,
 	buildLaneArgs,
 	DEFAULT_LANE_TOOLS,
+	defaultWaveOf,
 	laneEnv,
 	lanesCompletions,
 	missingBriefs,
@@ -26,7 +27,7 @@ import {
 	waveClaimedError,
 } from "../src/lane.ts";
 import type { LaneParams } from "../src/lane.ts";
-import type { LaneRecord } from "../src/derive.ts";
+import type { LaneRecord, WaveScan } from "../src/derive.ts";
 
 let failures = 0;
 function check(name: string, cond: boolean, detail?: string) {
@@ -410,10 +411,26 @@ check(
 	})(),
 );
 check(
-	"completions level 1: wave slugs filtered, deduped, sorted",
+	"completions level 1: wave slugs filtered, deduped, sorted; values end in the separator",
 	(() => {
 		const out = lanesCompletions("al", ["beta", "alpha", "alpha"], () => []);
-		return JSON.stringify(out) === JSON.stringify([{ value: "alpha", label: "alpha" }]);
+		return JSON.stringify(out) === JSON.stringify([{ value: "alpha ", label: "alpha" }]);
+	})(),
+);
+check(
+	"completions whitespace: leading blanks and runs collapse without losing the trailing-space level commit",
+	(() => {
+		const all = lanesCompletions("  ", ["beta", "alpha"], () => []);
+		const lead = lanesCompletions(" al", ["beta", "alpha", "gamma"], () => []);
+		const dbl = lanesCompletions("alpha  ", ["alpha"], (w) => (w === "alpha" ? ["docs", "search"] : []));
+		return (
+			JSON.stringify(all) === JSON.stringify([{ value: "alpha ", label: "alpha" }, { value: "beta ", label: "beta" }]) &&
+			JSON.stringify(lead) === JSON.stringify([{ value: "alpha ", label: "alpha" }]) &&
+			JSON.stringify(dbl) === JSON.stringify([
+				{ value: "alpha docs", label: "docs" },
+				{ value: "alpha search", label: "search" },
+			])
+		);
 	})(),
 );
 check(
@@ -431,6 +448,24 @@ check(
 	lanesCompletions("alpha d", ["alpha"], (w) => (w === "alpha" ? ["docs", "search"] : [])).length === 1 &&
 		lanesCompletions("a b c", ["alpha"], () => ["x"]).length === 0 &&
 		lanesCompletions("nope ", ["alpha"], () => []).length === 0,
+);
+
+const scan = (wave: string, ok: boolean, prior = false): WaveScan =>
+	ok
+		? { ok: true, wave, workDir: `/w/${wave}`, statuses: [], priorSession: prior, createdAt: "2026-01-01T00:00:00Z" }
+		: { ok: false, wave, workDir: `/w/${wave}`, error: "boom" };
+check(
+	"defaultWaveOf: the lone readable wave (prior sessions included) defaults; otherwise the wave list",
+	(() => {
+		const d = (s: WaveScan[]) => defaultWaveOf(s);
+		return (
+			d([]) === undefined &&
+			JSON.stringify(d([scan("survey", true)])) === JSON.stringify({ wave: "survey", workDir: "/w/survey" }) &&
+			JSON.stringify(d([scan("survey", true, true)])) === JSON.stringify({ wave: "survey", workDir: "/w/survey" }) &&
+			d([scan("survey", false)]) === undefined &&
+			d([scan("a", true), scan("b", true)]) === undefined
+		);
+	})(),
 );
 
 console.log(failures === 0 ? "\nall passed" : `\n${failures} FAILED`);

@@ -132,7 +132,8 @@ lanes [survey/docs]: running (turn 3 · bash · last 12s)   ← one lane running
 
 A lane gone quiet badges `(1 idle 75s)`; a lane past its deadline badges
 `(1 overdue)` — signals, not verdicts. `/lanes` inspects waves without
-spending model tokens: bare `/lanes` lists every wave, `/lanes <wave>`
+spending model tokens: bare `/lanes` lists every wave (with exactly one
+readable wave it shows that wave's table directly), `/lanes <wave>`
 prints the full table, `/lanes <wave> <lane>` shows one lane in detail —
 its trace, its artifact, its failure. Failed lanes link their transcript
 and `.err` where the terminal supports it. Full reference:
