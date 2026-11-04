@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.4.1 — 2026-11-04
+
+Polish, no contract movement — every tool call, manifest, and config
+valid on 0.4.0 keeps its meaning.
+
+- Lanes became self-sufficient: the three remedy-less refusals name
+  their fix (a claimed wave slug — status shows it, release frees it
+  once settled and collected, else a new slug; an unknown wave —
+  `ls <workDir>/*-manifest.json`; a missing timeoutBin/piBin — install
+  it, or point the config key at its PATH-visible name), `dispatch`
+  output ends with the blocking call that replaces polling
+  (`[next: lanes(wave=…, action='wait')]`) and its description says
+  wait-first (it said "Then poll with the lanes tool"), and schema
+  prose duplicating docs/api.md mechanics — the leash argv, the
+  tail-diagnosis recipe, the kill-grace detail, the bash scratch-dir
+  recipe — left the always-on descriptions (constraints kept;
+  5,239 → 4,766 description chars on every call).
+- Bare `/lanes` renders the lone wave's table when exactly one readable
+  wave is in scope (prior-session waves included — any session may
+  re-adopt); zero, corrupt-alone, or many waves keep the listing.
+  Completions advance one level per apply: runs collapse, leading
+  blanks trim, and wave values carry the trailing separator, so an
+  applied completion lands at lane position instead of stranding the
+  argument at neither level. api.md states the Tab trigger model —
+  pi routes forced Tab after a space to file-path completion, so
+  completions fire on typing; Esc-then-letter recovers from a forced
+  file list.
+- AGENTS.md (contributor-facing): lists src/lane.ts in the layout and
+  the actual host-API surface, and codifies the two conventions the
+  code now holds — a refusal names its fix, and schemas carry
+  constraints while docs/api.md carries mechanics and recipes.
+
 ## 0.4.0 — 2026-11-03
 
 Five changes, one theme: the TUI finally shows what the lanes are doing,
