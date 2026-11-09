@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.2 — 2026-11-09
 
 - `wait` no longer sits blind on a failed lane: the default wake condition
   is now every-lane-settled **or any-lane-failed** (surfaced at the poll
