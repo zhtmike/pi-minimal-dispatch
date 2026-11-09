@@ -17,7 +17,7 @@ export type DispatchConfig = {
 	deadlineSec: number;
 	/** Milliseconds between SIGTERM and SIGKILL in the `kill` action. Minimum 100. */
 	killGraceMs: number;
-	/** Statusbar poll interval in milliseconds. Minimum 100. */
+	/** Poll interval for wait's re-derive cadence and the statusbar, in milliseconds. Minimum 100. */
 	pollMs: number;
 	/** Lane binary, resolved from PATH. */
 	piBin: string;

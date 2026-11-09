@@ -72,6 +72,7 @@ import {
 	parseLanesArgs,
 	resolveExecutable,
 	resolveLaneFilter,
+	resolveWaitMode,
 	selectKillTargets,
 	waveClaimedError,
 } from "./lane.ts";
@@ -273,8 +274,8 @@ const lanesTool = defineTool({
 		"(starting/running/settled/failed + cause spawn|killed|deadline|crashed), turns, run-total usage, " +
 		"model + thinking level (actual, from the event stream — message_start's model once generation begins, last assistant message once it answers; pinned value before that; [default] in status lines for a pre-generation lane that pins nothing), " +
 		"stopReason, last-event age, in-flight tool name (latest unmatched tool_execution_start), .err tail for crashed lanes. action=wait: hold this call open, " +
-		"re-deriving at the pollMs cadence, until every lane is settled/failed (or the first one, with " +
-		"waitMode:'any') or waitSec (default 300, " +
+		"re-deriving at the pollMs cadence, until the waitMode wake condition holds (default: every lane settled or any " +
+		"failed — a failure surfaces at the poll cadence, never sat on) or waitSec (default 300, " +
 		"max 3600) elapses — then return the status table; replaces blind sleep-then-status polling. " +
 		"action=kill: SIGTERM the lane process group (escalating to SIGKILL after a grace), start-time guarded; refuses waves owned by a live foreign session; " +
 		"pass lane:[names] to signal only those lanes — untargeted lanes are untouched. " +
@@ -300,7 +301,7 @@ const lanesTool = defineTool({
 			}),
 		),
 		waitMode: Type.Optional(
-			stringEnum(["all", "any"], { description: "wait action only: 'any' returns as soon as the first lane is terminal (settled/failed) instead of all — the returned status table is unchanged" }),
+			stringEnum(["all", "hold", "any"], { description: "wait action only: 'hold' blocks until every lane is terminal — sits out already-known failures while siblings finish; 'any' returns as soon as the first lane is terminal — the returned status table is unchanged" }),
 		),
 		waitSec: Type.Optional(Type.Number({ description: "wait action only: max seconds to hold the call open (default 300; 1–3600)", minimum: 1, maximum: 3600 })),
 		inlineMaxBytes: Type.Optional(
@@ -334,7 +335,7 @@ const lanesTool = defineTool({
 
 		if (action === "wait") {
 			// A timeout is a normal status result with running lanes, never an error.
-			const statuses = await waitForTerminal(workDir, params.wave, (params.waitSec ?? 300) * 1000, cfg.pollMs, signal, params.waitMode === "any" ? "any" : "all");
+			const statuses = await waitForTerminal(workDir, params.wave, (params.waitSec ?? 300) * 1000, cfg.pollMs, signal, resolveWaitMode(params.waitMode));
 			return {
 				content: [{ type: "text", text: formatWaveStatus(params.wave, statuses) }],
 				structuredContent: { wave: params.wave, lanes: statuses },
