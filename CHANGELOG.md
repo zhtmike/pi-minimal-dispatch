@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.4.2 — 2026-11-09
+
+- `wait` no longer sits blind on a failed lane: the default wake condition
+  is now every-lane-settled **or any-lane-failed** (surfaced at the poll
+  cadence), where it previously held until every lane was terminal or
+  `waitSec` ran out. `waitMode` gains `hold` — block until every lane is
+  terminal, sitting out an already-known failure while the siblings finish
+  — because failure is sticky (tombstoned kills, PID-death crashes): without
+  it, a wave that lost a lane mid-run had no blocking call left. Failure
+  stays the dispatcher's decision: observation never signals, `hold` /
+  `kill` / redispatch are the primitives.
+
 ## 0.4.1 — 2026-11-04
 
 Polish, no contract movement — every tool call, manifest, and config

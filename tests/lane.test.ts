@@ -22,6 +22,7 @@ import {
 	parseLanesArgs,
 	resolveExecutable,
 	resolveLaneFilter,
+	resolveWaitMode,
 	selectKillTargets,
 	toolEntries,
 	waveClaimedError,
@@ -265,6 +266,7 @@ check(
 	"action params: waitMode accepted by wait only; the error names wait",
 	(() => {
 		assertActionParams("wait", { waitMode: "any" });
+		assertActionParams("wait", { waitMode: "hold" });
 		assertActionParams("status", {});
 		return (
 			throwsWith(() => assertActionParams("status", { waitMode: "any" }), "applies only to: wait") &&
@@ -279,7 +281,15 @@ check(
 );
 check(
 	"action params: waitMode value itself is validated on wait",
-	throwsWith(() => assertActionParams("wait", { waitMode: "bogus" }), `waitMode must be "all" or "any"`),
+	throwsWith(() => assertActionParams("wait", { waitMode: "bogus" }), `waitMode must be "all", "hold", or "any"`),
+);
+check(
+	"resolveWaitMode: forwards the validated enum and defaults to all — the tool layer's single forwarding call",
+	resolveWaitMode(undefined) === "all" &&
+		resolveWaitMode("all") === "all" &&
+		resolveWaitMode("hold") === "hold" &&
+		resolveWaitMode("any") === "any" &&
+		throwsWith(() => resolveWaitMode("sometimes"), `waitMode must be "all", "hold", or "any"`),
 );
 check(
 	"action params: inlineMaxBytes accepted by collect only, rejected elsewhere naming collect",

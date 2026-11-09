@@ -100,8 +100,8 @@ export function formatWaveStatus(wave: string, statuses: LaneStatus[]): string {
 /** One bracketed line appended to dispatch output: the blocking call that replaces status polling. */
 export function dispatchNextHint(wave: string): string {
 	return (
-		`[next: lanes(wave='${wave}', action='wait') — blocks until every lane settles or fails; ` +
-		"waitSec caps the hold; action='status' to peek]"
+		`[next: lanes(wave='${wave}', action='wait') — blocks until every lane settles or any fails; ` +
+		"waitSec caps it; action='status' to peek]"
 	);
 }
 

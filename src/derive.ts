@@ -314,13 +314,16 @@ export function waveTerminal(lanes: LaneRecord[], now: number): boolean {
 	});
 }
 
-export type WaitMode = "all" | "any";
+export type WaitMode = "all" | "hold" | "any";
 
 /**
- * Poll a wave until its wake condition holds — every lane terminal (`all`), or
- * the first one (`any`) — `waitMs` elapses, or the signal aborts; returns the
- * final statuses. Re-reads the manifest on every poll — the same derived
- * truth as the status action, held open.
+ * Poll a wave until its wake condition holds — every lane settled or any
+ * lane failed (`all`), every lane terminal (`hold`), the first terminal
+ * lane (`any`) — `waitMs` elapses, or the signal aborts; returns the final
+ * statuses. A failed lane wakes `all` and `any` at the poll cadence —
+ * never sat on behind running siblings; `hold` sits out already-known
+ * failures while the siblings finish. Re-reads the manifest on every
+ * poll — the same derived truth as the status action, held open.
  */
 export async function waitForTerminal(
 	workDir: string,
@@ -330,16 +333,20 @@ export async function waitForTerminal(
 	signal?: AbortSignal,
 	mode: WaitMode = "all",
 ): Promise<LaneStatus[]> {
+	const terminal = (s: LaneStatus) => s.state === "settled" || s.state === "failed";
 	const deadline = Date.now() + waitMs;
 	for (;;) {
 		const lanes = readManifest(workDir, wave).lanes;
 		const now = Date.now();
+		const statuses = lanes.map((lane) => deriveLane(lane, now));
 		const woken =
 			mode === "any"
-				? lanes.some((lane) => ["settled", "failed"].includes(deriveLane(lane, now).state))
-				: waveTerminal(lanes, now);
+				? statuses.some(terminal)
+				: mode === "hold"
+					? statuses.every(terminal)
+					: statuses.every((s) => s.state === "settled") || statuses.some((s) => s.state === "failed");
 		if (woken || now >= deadline || signal?.aborted) {
-			return lanes.map((lane) => deriveLane(lane, now));
+			return statuses;
 		}
 		// The sleep races the abort so a cancelled call returns at once, not at the next poll.
 		await new Promise<void>((resolve) => {

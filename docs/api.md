@@ -92,7 +92,7 @@ fresh one after the dispatcher exited — sees the same truth.
 | `wave` | string | — | Wave slug |
 | `action` | string? | `"status"` | `"status"` \| `"wait"` \| `"kill"` \| `"collect"` \| `"release"` |
 | `lane` | string[]? | — | `kill`/`collect` only: target exactly the named lanes. Unknown slug → error listing the wave's lanes; a bare string is wrapped (min 1 name) |
-| `waitMode` | `"all"\|"any"`? | `"all"` | `wait` only: `any` returns as soon as the first lane is terminal — the returned status table is unchanged |
+| `waitMode` | `"all"\|"hold"\|"any"`? | `"all"` | `wait` only: `hold` blocks until every lane is terminal (sits out already-known failures while siblings finish); `any` returns at the first terminal lane — the returned status table is unchanged |
 | `waitSec` | number? | `300` | `wait` only: max seconds to hold the call open (1–3600) |
 | `inlineMaxBytes` | integer? | `0` | `collect` only: inline each non-suspect lane's artifact content after its line when the artifact is ≤ N bytes (0 = never inline) |
 | `workDir` | string? | `workDir` config (`.pi/work`) | Directory holding the manifest |
@@ -129,22 +129,33 @@ Per-lane `structuredContent` entries. Note: `settled` only means the
 ### `wait`
 
 Holds the tool call open, re-reading the manifest and re-deriving state every
-`pollMs`, until every lane is terminal (`settled` or `failed`), `waitSec`
+`pollMs`, until every lane is `settled`, any lane has failed, `waitSec`
 (default 300, max 3600) elapses, or the call is cancelled — then returns
-exactly the `status` payload. A timeout is **not** an error: lanes still
+exactly the `status` payload. A failure wakes the call at the poll cadence:
+a crashed lane is never sat on behind running siblings — the caller sees the
+table and decides (sit the siblings out with `waitMode: "hold"`, `kill` the
+rest, redispatch a fixed lane).
+A timeout is **not** an error: lanes still
 running show as `running`, and the caller waits again (or proceeds to
 `kill`/`collect`, which refuse running lanes as usual). This replaces
 sleep-then-status polling, which guesses the duration and wakes late after a
 settle. `dispatch` still returns in under a second — blocking is always this
 explicit, bounded observation call, and the deadline leash needs no observer.
 
-`waitMode: "any"` changes only the wake condition: the call returns as soon
-as **one** lane of the wave is terminal (`settled` or `failed`) — the scout
-fan-out's early-action need; three answers need not wait for the fourth.
-The returned payload is the same full status table; with every lane already
-terminal it returns immediately, as `all` does. A `lane` filter is not
-offered on `wait`: first-settlement plus a bounded `waitSec` covers the
-early-action need.
+`waitMode` selects the wake condition; the returned payload is always the
+same full status table, and with every lane already terminal all modes
+return immediately.
+
+- `all` (default) — every lane `settled`, or any lane `failed`: a failure is
+  surfaced at the poll cadence, never sat on behind running siblings.
+- `hold` — every lane terminal (`settled` or `failed`): the blocking call for
+  a wave that has already lost a lane — it sits out the known failure while
+  the siblings finish, within `waitSec`.
+- `any` — the first terminal lane: the scout fan-out's early-action need;
+  three answers need not wait for the fourth.
+
+A `lane` filter is not offered on `wait`: first-settlement plus a bounded
+`waitSec` covers the early-action need.
 
 ### `kill`
 
@@ -334,7 +345,7 @@ The lane protocol itself is fixed — every lane runs `--mode json --no-session
 | `workDir` | string | `.pi/work` | Default wave directory |
 | `deadlineSec` | number | `900` | Default lane leash (integer ≥ 1) |
 | `killGraceMs` | number | `5000` | SIGTERM→SIGKILL grace in the `kill` action; also the leash's `timeout -k` escalation (integer ≥ 100) |
-| `pollMs` | number | `2000` | Statusbar poll interval (integer ≥ 100) |
+| `pollMs` | number | `2000` | Poll interval for `wait`'s re-derive cadence and the statusbar (integer ≥ 100) — the knob for failure-detection latency in `wait` |
 | `piBin` | string | `"pi"` | Lane pi binary, resolved from `PATH` |
 | `timeoutBin` | string | `"timeout"` | Leash binary — set `"gtimeout"` if coreutils isn't linked on macOS |
 

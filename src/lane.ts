@@ -7,7 +7,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { DispatchConfig } from "./config.ts";
-import type { LaneRecord, WaveScan } from "./derive.ts";
+import type { LaneRecord, WaitMode, WaveScan } from "./derive.ts";
 
 export const SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
@@ -240,9 +240,7 @@ export function assertActionParams(action: string, params: LanesParamSet): void 
 		if (action !== "wait") {
 			throw new Error(`parameter 'waitMode' is not accepted by action '${action}' — it applies only to: wait`);
 		}
-		if (params.waitMode !== "all" && params.waitMode !== "any") {
-			throw new Error(`waitMode must be "all" or "any", got '${String(params.waitMode)}'`);
-		}
+		resolveWaitMode(params.waitMode);
 	}
 	if (params.inlineMaxBytes !== undefined) {
 		if (action !== "collect") {
@@ -252,6 +250,17 @@ export function assertActionParams(action: string, params: LanesParamSet): void 
 			throw new Error(`inlineMaxBytes must be an integer >= 0, got ${String(params.inlineMaxBytes)}`);
 		}
 	}
+}
+
+/**
+ * The wait action's wake condition: the enum's tool-boundary owner — validated
+ * and defaulted here; the tool layer forwards this one call.
+ */
+export function resolveWaitMode(raw: unknown): WaitMode {
+	if (raw !== undefined && raw !== "all" && raw !== "hold" && raw !== "any") {
+		throw new Error(`waitMode must be "all", "hold", or "any", got '${String(raw)}'`);
+	}
+	return (raw as WaitMode | undefined) ?? "all";
 }
 
 /**

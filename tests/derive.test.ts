@@ -413,7 +413,52 @@ writeAnyManifest();
 	);
 }
 
+// wait-all: a failed lane wakes the default mode — a crash is never sat on behind a sibling.
+writeAnyEvents(fastLane, runningEvents);
+writeAnyEvents(slowLane, runningEvents);
 slowChild.kill("SIGKILL");
+await new Promise<void>((r) => slowChild.on("close", () => r()));
+{
+	const t0 = Date.now();
+	const statuses = await waitForTerminal(workDir3, "any", 10000, 50, undefined, "all");
+	const elapsed = Date.now() - t0;
+	check(
+		"wait-all: a crashed lane wakes all-mode within ~pollMs",
+		statuses.find((s) => s.name === "fast")!.state === "running" &&
+			statuses.find((s) => s.name === "slow")!.state === "failed" &&
+			statuses.find((s) => s.name === "slow")!.cause === "crashed" &&
+			elapsed < 2500,
+		JSON.stringify(statuses.map((s) => `${s.name}:${s.state}:${s.cause}`)) + ` elapsed ${elapsed}ms`,
+	);
+}
+
+// wait-hold: a known failure does not wake hold-mode — it blocks for the siblings.
+{
+	const t0 = Date.now();
+	const statuses = await waitForTerminal(workDir3, "any", 300, 50, undefined, "hold");
+	const elapsed = Date.now() - t0;
+	check(
+		"wait-hold: sits out the crashed lane, blocks to timeout with the table",
+		elapsed >= 280 && elapsed < 2500 &&
+			statuses.find((s) => s.name === "fast")!.state === "running" &&
+			statuses.find((s) => s.name === "slow")!.state === "failed",
+		`elapsed ${elapsed}ms`,
+	);
+}
+
+// wait-hold: every lane terminal returns immediately.
+writeAnyEvents(fastLane, [sessionHeader, { type: "agent_settled" }]);
+{
+	const t0 = Date.now();
+	const statuses = await waitForTerminal(workDir3, "any", 5000, 200, undefined, "hold");
+	const elapsed = Date.now() - t0;
+	check(
+		"wait-hold: all-terminal returns immediately",
+		statuses.every((s) => s.state !== "running") && elapsed < 1500,
+		JSON.stringify(statuses.map((s) => `${s.name}:${s.state}`)) + ` elapsed ${elapsed}ms`,
+	);
+}
+
 fs.rmSync(workDir3, { recursive: true, force: true });
 
 

@@ -67,8 +67,10 @@ check(
 
 const hint = dispatchNextHint("survey");
 check(
-	"dispatch hint: one bracketed line naming the wave and wait",
-	hint.startsWith("[next: lanes(wave='survey', action='wait')") && hint.endsWith("]") && !hint.includes("\n"),
+	"dispatch hint: one bracketed line naming the wave, wait, and the failure-wake clause",
+	hint.startsWith("[next: lanes(wave='survey', action='wait')") &&
+		hint.includes("blocks until every lane settles or any fails") &&
+		hint.endsWith("]") && !hint.includes("\n"),
 	hint,
 );
 

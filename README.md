@@ -71,7 +71,7 @@ A real session:
     docs: pid 99015 (deadline 900s)
     review: pid 99016 (deadline 900s)
   manifest: /abs/path/to/.pi/work/survey-manifest.json
-  [next: lanes(wave='survey', action='wait') — blocks until every lane settles or fails; waitSec caps the hold; action='status' to peek]
+  [next: lanes(wave='survey', action='wait') — blocks until every lane settles or any fails; waitSec caps it; action='status' to peek]
 
 > lanes     wave="survey" action="wait"
   docs [glm-5.3-flash] · settled · 2 turns · tok 5703in/90out, $0.0009 · stop:stop · last 0.8s ago
@@ -85,8 +85,9 @@ A real session:
 
 The ceremony: *write briefs → `dispatch` → `wait` (or poll `status`) →
 `collect` → `release`*. `dispatch` never blocks; waiting is an explicit,
-bounded `wait` call that returns the status table the moment every lane
-is `settled`/`failed` — no sleep-then-poll guessing. In the TUI, a
+bounded `wait` call that returns the status table the moment every lane is
+`settled` or any has `failed` (surfaced at the poll cadence) — no
+sleep-then-poll guessing. In the TUI, a
 `collect` result expands (ctrl+o / click) to render each lane's artifact
 in place. `release` deletes exactly the wave's own files and refuses
 unsettled, foreign-owned, and unconsumed waves — collect first, and a
@@ -94,7 +95,9 @@ human may always delete by hand ([details](docs/api.md#release)).
 **Steering** is kill + redispatch: refine the brief, run a new wave
 (slugs are single-use). **Hang detection**: `lastEventAgeSec` is the
 signal — no event growth for ~2× the lane's normal turn latency ⇒
-`kill` and redispatch.
+`kill` and redispatch. **Failed lanes**: `wait` wakes at the first failure —
+`waitMode: "hold"` sees the running siblings through, or steer: `kill` +
+redispatch under a new slug.
 
 ## API
 
