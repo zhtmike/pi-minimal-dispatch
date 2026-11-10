@@ -37,7 +37,7 @@ Releasing therefore is: bump `version` in `package.json`, add the CHANGELOG
 section, commit, then `git tag vX.Y.Z && git push origin vX.Y.Z`.
 
 One-time setup (already done or needed once, not per release): on npmjs.com,
-add a trusted publisher for `pi-minimal-dispatch` pointing at this repository
+add a trusted publisher for `@zhtmike/pi-minimal-dispatch` pointing at this repository
 and the `release.yml` workflow; on GitHub, protect `main` and require the
 Tests workflow.
 

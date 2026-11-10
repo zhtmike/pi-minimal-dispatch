@@ -46,7 +46,7 @@ The full design rationale, positioning, and origin story:
 ## Install
 
 ```bash
-pi install npm:pi-minimal-dispatch                     # official (registry)
+pi install npm:@zhtmike/pi-minimal-dispatch            # official (registry)
 pi install git:github.com/zhtmike/pi-minimal-dispatch  # tracks main
 pi -e ./src/index.ts                                   # try it for one invocation
 ```
