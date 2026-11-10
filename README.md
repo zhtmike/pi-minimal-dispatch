@@ -1,8 +1,7 @@
 # pi-minimal-dispatch
 
 Minimal detached lane dispatch with **visible state** for the
-[pi coding agent](https://pi.dev) — two tools, one manifest: no personas,
-no queue, no server, zero runtime dependencies.
+[pi coding agent](https://pi.dev).
 
 Lanes are detached `pi --mode json` processes in their own process groups:
 they survive the dispatcher's death, and their live state is derived from
@@ -46,7 +45,7 @@ The full design rationale, positioning, and origin story:
 ## Install
 
 ```bash
-pi install npm:pi-minimal-dispatch                     # official (registry)
+pi install npm:@zhtmike/pi-minimal-dispatch            # official (registry)
 pi install git:github.com/zhtmike/pi-minimal-dispatch  # tracks main
 pi -e ./src/index.ts                                   # try it for one invocation
 ```
