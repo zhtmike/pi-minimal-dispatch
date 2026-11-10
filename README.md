@@ -1,8 +1,7 @@
 # pi-minimal-dispatch
 
 Minimal detached lane dispatch with **visible state** for the
-[pi coding agent](https://pi.dev) — two tools, one manifest: no personas,
-no queue, no server, zero runtime dependencies.
+[pi coding agent](https://pi.dev).
 
 Lanes are detached `pi --mode json` processes in their own process groups:
 they survive the dispatcher's death, and their live state is derived from
