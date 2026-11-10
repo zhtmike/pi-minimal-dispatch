@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.0 — 2026-11-10
+
+- The package now publishes as `@zhtmike/pi-minimal-dispatch`; install
+  with `pi install npm:@zhtmike/pi-minimal-dispatch`. The unscoped
+  `pi-minimal-dispatch` will be deprecated in favor of the new name — the
+  move is registry identity only: behavior, config files
+  (`pi-minimal-dispatch.json` at both levels), and the tool surface are
+  unchanged.
+- The README tagline and package description dropped their slogan
+  fragments; they now state only what the package is.
+
 ## 0.4.2 — 2026-11-09
 
 - `wait` no longer sits blind on a failed lane: the default wake condition
