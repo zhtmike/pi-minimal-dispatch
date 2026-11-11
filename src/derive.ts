@@ -8,7 +8,7 @@ import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import { hostname } from "node:os";
 import * as path from "node:path";
-import { type LaneEvent, type StreamMessage, assistantMessageEnd, assistantMessageStart, messageText, parseEvents } from "./events.ts";
+import { type LaneEvent, type StreamMessage, assistantMessageEnd, assistantMessageStart, messageText, parseEvents, parseEventsTail } from "./events.ts";
 
 export type LaneRecord = {
 	name: string;
@@ -80,8 +80,20 @@ export function manifestPathFor(workDir: string, wave: string): string {
 /** Read and parse a wave manifest; throws with the path when absent or invalid. */
 export function readManifest(workDir: string, wave: string): Manifest {
 	const p = manifestPathFor(workDir, wave);
-	if (!fs.existsSync(p)) throw new Error(`unknown wave '${wave}' (no manifest at ${p}) — list live waves: ls ${path.dirname(p)}/*-manifest.json`);
-	return JSON.parse(fs.readFileSync(p, "utf8")) as Manifest;
+	const unknown = new Error(`unknown wave '${wave}' (no manifest at ${p}) — list live waves: ls ${path.dirname(p)}/*-manifest.json`);
+	let raw: string;
+	try {
+		raw = fs.readFileSync(p, "utf8");
+	} catch (e: any) {
+		if (e.code === "ENOENT") throw unknown;
+		throw e;
+	}
+	if (raw === "") throw new Error(`manifest for wave '${wave}' at ${p} is empty — a dispatch may be mid-publish; retry`);
+	try {
+		return JSON.parse(raw) as Manifest;
+	} catch (e: any) {
+		throw new Error(`invalid manifest JSON at ${p}: ${e.message}`);
+	}
 }
 
 /** Atomically replace a wave manifest (pid-suffixed tmp, same-fs rename). */
@@ -116,6 +128,52 @@ export function pidAlive(pid: number, expectedStart: string | null): boolean {
 	if (expectedStart === null) return reachable;
 	const actual = psLstart(pid);
 	return actual !== "" && actual === expectedStart;
+}
+
+// An out-of-range pid (a foreign-host manifest on a shared workDir) makes BSD ps reject
+// the whole batch — drop it instead; it is not a process on this host.
+const MAX_PID = process.platform === "darwin" ? 99998 : 4194304;
+
+/**
+ * One `ps` listing for many pids: pid → lstart, absent = not running here. A
+ * failed listing means no listed pid exists — the same verdict `psLstart`
+ * gives a dead pid, never an exception.
+ */
+export function psLstartBatch(pids: number[]): Map<number, string> {
+	const live = [...new Set(pids)].filter((p) => Number.isInteger(p) && p > 0 && p <= MAX_PID);
+	if (live.length === 0) return new Map();
+	let out: string;
+	try {
+		out = execFileSync("ps", ["-o", "pid=,lstart=", "-p", live.join(",")], { encoding: "utf8" });
+	} catch {
+		return new Map();
+	}
+	const map = new Map<number, string>();
+	for (const line of out.split("\n")) {
+		const m = line.trim().match(/^(\d+)\s+(.+)$/);
+		if (m !== null) map.set(Number(m[1]), m[2].trim());
+	}
+	return map;
+}
+
+/** Liveness from a batch probe: listed with a matching start-time (a reused pid shows a different one). */
+function probeAlive(probe: Map<number, string>, pid: number, expectedStart: string | null): boolean {
+	const actual = probe.get(pid);
+	return actual !== undefined && (expectedStart === null || actual === expectedStart);
+}
+
+/**
+ * Whether any process remains in the group — the kill grace check. The leader
+ * may already be dead on SIGTERM while a TERM-immune member lingers; a group
+ * probe is the honest survivor test once the leader is gone.
+ */
+export function groupAlive(pgid: number): boolean {
+	try {
+		process.kill(-pgid, 0);
+		return true;
+	} catch (e: any) {
+		return e.code !== "ESRCH"; // EPERM: the group exists
+	}
 }
 
 // --- wave ownership --------------------------------------------------------
@@ -227,18 +285,179 @@ function emptyUsage(): Usage {
 	return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
 }
 
+const ERR_TAIL_BYTES = 8192;
+const ERR_TAIL_LINES = 5;
+const ERR_LINE_MAX_CHARS = 300;
+
+/** Last few err lines, byte- and width-bounded — a tail read, never the whole file. */
 function errTailFor(lane: LaneRecord): string | undefined {
-	if (!fs.existsSync(lane.errPath)) return undefined;
-	const err = fs.readFileSync(lane.errPath, "utf8").trim();
-	return err === "" ? undefined : err.split("\n").slice(-5).join("\n");
+	let st: fs.Stats;
+	try {
+		st = fs.statSync(lane.errPath);
+	} catch {
+		return undefined;
+	}
+	if (st.size === 0) return undefined;
+	const len = Math.min(st.size, ERR_TAIL_BYTES);
+	let body: string;
+	const fd = fs.openSync(lane.errPath, "r");
+	try {
+		const buf = Buffer.alloc(len);
+		fs.readSync(fd, buf, 0, len, st.size - len);
+		body = buf.toString("utf8");
+	} finally {
+		fs.closeSync(fd);
+	}
+	if (len < st.size) {
+		const nl = body.indexOf("\n");
+		body = nl === -1 ? "" : body.slice(nl + 1); // the head line is partial — drop it
+	}
+	const lines = body.trim().split("\n").filter((l) => l !== "");
+	if (lines.length === 0) return undefined;
+	return lines
+		.slice(-ERR_TAIL_LINES)
+		.map((l) => (l.length > ERR_LINE_MAX_CHARS ? `${l.slice(0, ERR_LINE_MAX_CHARS)}…` : l))
+		.join("\n");
 }
 
-/** Derive a lane's status from its events file, PID liveness, and manifest facts. Never stored. */
-export function deriveLane(lane: LaneRecord, now: number, events: LaneEvent[] = parseEvents(lane.eventsPath)): LaneStatus {
-	// Precedence mirrors pi: an explicit --thinking beats the model's `:thinking` suffix, which
-	// splits only on the last colon and a valid level word (ids like `qwen3-coder:exacto` keep it).
+// --- incremental transcript cache ------------------------------------------
+
+/** Event-derived transcript facts, independent of manifest identity. */
+type LaneFold = {
+	turns: number;
+	hasSession: boolean;
+	settled: boolean;
+	usage: Usage;
+	/** Most recent model named by message_start or message_end, in stream order. */
+	lastModel?: string;
+	/** Model of the last message_end that carried one — its thinkingLevel (or its absence) is authoritative. */
+	lastEndModel?: string;
+	lastEndThinking?: string;
+	stopReason?: string;
+	/** Open tool calls keyed by id in start order; the last value is the tool running now. */
+	openTools: Map<string, string>;
+	lastText: string;
+};
+
+function emptyFold(): LaneFold {
+	return { turns: 0, hasSession: false, settled: false, usage: emptyUsage(), openTools: new Map(), lastText: "" };
+}
+
+/** Fold events [from, end) into the accumulator — the single derivation pass over a transcript. */
+function foldInto(fold: LaneFold, events: LaneEvent[], from: number): void {
+	for (let i = from; i < events.length; i++) {
+		const e = events[i];
+		if (e.type === "turn_start") fold.turns++;
+		// message_start reveals the answering model at generation start; it carries no
+		// thinkingLevel — message_end stays the sole level authority.
+		const starting = assistantMessageStart(e);
+		if (starting !== null && typeof starting.model === "string") fold.lastModel = starting.model;
+		const message = assistantMessageEnd(e);
+		if (message !== null) {
+			const u = message.usage ?? {};
+			fold.usage.input += u.input ?? 0;
+			fold.usage.output += u.output ?? 0;
+			fold.usage.cacheRead += u.cacheRead ?? 0;
+			fold.usage.cacheWrite += u.cacheWrite ?? 0;
+			fold.usage.cost += u.cost?.total ?? 0;
+			if (typeof message.stopReason === "string") fold.stopReason = message.stopReason;
+			// The last assistant message carrying a model is authoritative for identity —
+			// one without thinkingLevel (a non-thinking model) clears a stale level.
+			if (typeof message.model === "string") {
+				fold.lastModel = message.model;
+				fold.lastEndModel = message.model;
+				fold.lastEndThinking = typeof message.thinkingLevel === "string" ? message.thinkingLevel : undefined;
+			}
+			fold.lastText = messageText(message);
+		}
+		if (e.type === "session") fold.hasSession = true;
+		if (e.type === "agent_settled") fold.settled = true;
+		if (e.type === "tool_execution_start" && typeof e.toolCallId === "string" && typeof e.toolName === "string") {
+			fold.openTools.set(e.toolCallId, e.toolName);
+		}
+		if (e.type === "tool_execution_end" && typeof e.toolCallId === "string") {
+			fold.openTools.delete(e.toolCallId);
+		}
+	}
+}
+
+export type LaneEvents = { events: LaneEvent[]; fold: LaneFold; mtimeMs: number | null };
+
+type EventsCacheEntry = {
+	/** Bytes confirmed parsed — through the last accepted line; a torn remainder waits here. */
+	offset: number;
+	size: number;
+	mtimeMs: number;
+	/** File identity — a recreated file (slug reuse after release) resets the entry. */
+	ino: number;
+	lineNo: number;
+	/** Shared read-only with callers; extended in place as the file grows. */
+	events: LaneEvent[];
+	fold: LaneFold;
+	/** Prefix length of `events` already folded. */
+	folded: number;
+};
+
+// Events files are append-only with a single writer; anything else — shrink, or a new
+// inode from release + slug reuse — resets the entry. Past the cap the table clears.
+const eventsCache = new Map<string, EventsCacheEntry>();
+const EVENTS_CACHE_MAX = 64;
+
+/**
+ * A lane's parsed transcript and derived fold, stat-gated and extended from the
+ * last confirmed byte — an unchanged file costs one stat, a growing one parses
+ * only its appended lines. Throws on a corrupt line.
+ */
+export function laneEvents(eventsPath: string): LaneEvents {
+	let st: fs.Stats;
+	try {
+		st = fs.statSync(eventsPath);
+	} catch {
+		eventsCache.delete(eventsPath);
+		return { events: [], fold: emptyFold(), mtimeMs: null };
+	}
+	let entry = eventsCache.get(eventsPath);
+	if (entry !== undefined && (st.size < entry.offset || st.ino !== entry.ino)) entry = undefined; // replaced
+	if (entry !== undefined && st.size === entry.size && st.mtimeMs === entry.mtimeMs) {
+		return { events: entry.events, fold: entry.fold, mtimeMs: st.mtimeMs };
+	}
+	const from = entry?.offset ?? 0;
+	let tail: string;
+	if (from === 0) {
+		tail = fs.readFileSync(eventsPath, "utf8");
+	} else {
+		const len = st.size - from;
+		const buf = Buffer.alloc(len);
+		const fd = fs.openSync(eventsPath, "r");
+		try {
+			fs.readSync(fd, buf, 0, len, from);
+		} finally {
+			fs.closeSync(fd);
+		}
+		tail = buf.toString("utf8");
+	}
+	const events = entry?.events ?? [];
+	const before = events.length;
+	let parsed: { consumed: number; lineNo: number };
+	try {
+		parsed = parseEventsTail(tail, events, entry?.lineNo ?? 0, eventsPath);
+	} catch (e) {
+		events.length = before; // the shared array must not keep a half-extended prefix
+		throw e;
+	}
+	const fold = entry?.fold ?? emptyFold();
+	foldInto(fold, events, entry?.folded ?? 0);
+	if (eventsCache.get(eventsPath) === undefined && eventsCache.size >= EVENTS_CACHE_MAX) eventsCache.clear();
+	eventsCache.set(eventsPath, { offset: from + parsed.consumed, size: st.size, mtimeMs: st.mtimeMs, ino: st.ino, lineNo: parsed.lineNo, events, fold, folded: events.length });
+	return { events, fold, mtimeMs: st.mtimeMs };
+}
+
+// --- lane status ------------------------------------------------------------
+
+/** Manifest-fact base for a lane no transcript could be derived for. */
+function bareStatus(lane: LaneRecord): LaneStatus {
 	const pinned = lane.model?.match(/^(.+):(off|minimal|low|medium|high|xhigh|max)$/);
-	const base: LaneStatus = {
+	return {
 		name: lane.name,
 		state: "failed",
 		turns: 0,
@@ -247,71 +466,97 @@ export function deriveLane(lane: LaneRecord, now: number, events: LaneEvent[] = 
 		thinkingLevel: lane.thinking ?? pinned?.[2],
 		lastEventAgeSec: null,
 	};
+}
 
-	if (!lane.spawned) return { ...base, cause: "spawn", spawnError: lane.spawnError };
+function statMtimeMs(p: string): number | null {
+	try {
+		return fs.statSync(p).mtimeMs;
+	} catch {
+		return null;
+	}
+}
 
-	// Open tool calls keyed by id in start order; the last one is the tool running now.
-	const openTools = new Map<string, string>();
-	for (const e of events) {
-		if (e.type === "turn_start") base.turns++;
-		// message_start reveals the answering model at generation start; it carries no
-		// thinkingLevel — message_end stays the sole level authority.
-		const starting = assistantMessageStart(e);
-		if (starting !== null && typeof starting.model === "string") {
-			base.model = starting.model;
-		}
-		const message = assistantMessageEnd(e);
-		if (message !== null) {
-			const u = message.usage ?? {};
-			base.usage.input += u.input ?? 0;
-			base.usage.output += u.output ?? 0;
-			base.usage.cacheRead += u.cacheRead ?? 0;
-			base.usage.cacheWrite += u.cacheWrite ?? 0;
-			base.usage.cost += u.cost?.total ?? 0;
-			if (typeof message.stopReason === "string") base.stopReason = message.stopReason;
-			// The last assistant message is authoritative for identity — a message without
-			// thinkingLevel (model switch to a non-thinking model) clears a stale level.
-			if (typeof message.model === "string") {
-				base.model = message.model;
-				base.thinkingLevel = typeof message.thinkingLevel === "string" ? message.thinkingLevel : undefined;
-			}
-		}
-		if (e.type === "tool_execution_start" && typeof e.toolCallId === "string" && typeof e.toolName === "string") {
-			openTools.set(e.toolCallId, e.toolName);
-		}
-		if (e.type === "tool_execution_end" && typeof e.toolCallId === "string") {
-			openTools.delete(e.toolCallId);
-		}
-	}
-	if (openTools.size > 0) base.inflightTool = [...openTools.values()].at(-1);
-	if (fs.existsSync(lane.eventsPath)) {
-		base.lastEventAgeSec = Math.round((now - fs.statSync(lane.eventsPath).mtimeMs) / 100) / 10;
-	}
+/**
+ * Compose a lane's status from its transcript fold, liveness, and manifest
+ * facts. Precedence mirrors pi: an explicit --thinking beats the model's
+ * `:thinking` suffix, which splits only on the last colon and a valid level
+ * word (ids like `qwen3-coder:exacto` keep it).
+ */
+function laneStatus(lane: LaneRecord, now: number, fold: LaneFold, mtimeMs: number | null, alive: boolean): LaneStatus {
+	const pinned = lane.model?.match(/^(.+):(off|minimal|low|medium|high|xhigh|max)$/);
+	const base: LaneStatus = {
+		name: lane.name,
+		state: "failed",
+		turns: fold.turns,
+		usage: fold.usage,
+		model: fold.lastModel ?? pinned?.[1] ?? lane.model,
+		thinkingLevel: fold.lastEndModel !== undefined ? fold.lastEndThinking : lane.thinking ?? pinned?.[2],
+		lastEventAgeSec: mtimeMs === null ? null : Math.round((now - mtimeMs) / 100) / 10,
+	};
+	if (fold.stopReason !== undefined) base.stopReason = fold.stopReason;
+	if (fold.openTools.size > 0) base.inflightTool = [...fold.openTools.values()].at(-1);
 
 	const pastDeadline = now > Date.parse(lane.startedAt) + lane.deadlineSec * 1000;
-
-	if (events.some((e) => e.type === "agent_settled")) return { ...base, state: "settled" };
-
-	const alive = lane.pid !== null && pidAlive(lane.pid, lane.processStart);
+	if (fold.settled) return { ...base, state: "settled" };
 	if (!alive) {
 		if (lane.killedAt) return { ...base, cause: "killed" };
 		if (pastDeadline) return { ...base, cause: "deadline" };
 		return { ...base, cause: "crashed", errTail: errTailFor(lane) };
 	}
+	return { ...base, state: fold.hasSession ? "running" : "starting", overdue: pastDeadline };
+}
 
-	return {
-		...base,
-		state: events.some((e) => e.type === "session") ? "running" : "starting",
-		overdue: pastDeadline,
-	};
+/**
+ * Derive a lane's status from its events file, PID liveness, and manifest
+ * facts. Without explicit events the stat-gated cache keeps the cost to the
+ * appended bytes; a corrupt transcript fails soft per lane — failed/crashed
+ * with the parse error as its err tail — so kill, collect, and release stay
+ * available for the wave.
+ */
+export function deriveLane(lane: LaneRecord, now: number, events?: LaneEvent[]): LaneStatus {
+	if (!lane.spawned) return { ...bareStatus(lane), cause: "spawn", spawnError: lane.spawnError };
+	if (events !== undefined) {
+		const fold = emptyFold();
+		foldInto(fold, events, 0);
+		return laneStatus(lane, now, fold, statMtimeMs(lane.eventsPath), lane.pid !== null && pidAlive(lane.pid, lane.processStart));
+	}
+	try {
+		const s = laneEvents(lane.eventsPath);
+		return laneStatus(lane, now, s.fold, s.mtimeMs, lane.pid !== null && pidAlive(lane.pid, lane.processStart));
+	} catch (e: any) {
+		return { ...bareStatus(lane), cause: "crashed", errTail: `${e.message} — kill/collect/release remain available` };
+	}
+}
+
+/**
+ * Derive a sweep of lanes with one ps probe for the pids whose verdict needs
+ * liveness (not settled by events, not tombstoned) — the statusbar tick, wait
+ * polls, and scans pay one subprocess per sweep, not one per lane.
+ */
+export function deriveLanes(lanes: LaneRecord[], now: number): LaneStatus[] {
+	const states: (LaneEvents | undefined)[] = lanes.map((l) => {
+		if (!l.spawned) return undefined;
+		try {
+			return laneEvents(l.eventsPath);
+		} catch {
+			return undefined; // fail-soft per lane in the derive below
+		}
+	});
+	const probe = psLstartBatch(
+		lanes
+			.filter((l, i) => l.spawned && l.pid !== null && l.killedAt === undefined && states[i] !== undefined && !states[i]!.fold.settled)
+			.map((l) => l.pid!),
+	);
+	return lanes.map((lane, i) => {
+		const state = states[i];
+		if (!lane.spawned || state === undefined) return deriveLane(lane, now);
+		return laneStatus(lane, now, state.fold, state.mtimeMs, lane.pid !== null && probeAlive(probe, lane.pid, lane.processStart));
+	});
 }
 
 /** Whether every lane of a wave has reached a terminal state (`settled` or `failed`). */
 export function waveTerminal(lanes: LaneRecord[], now: number): boolean {
-	return lanes.every((lane) => {
-		const state = deriveLane(lane, now).state;
-		return state === "settled" || state === "failed";
-	});
+	return deriveLanes(lanes, now).every((s) => s.state === "settled" || s.state === "failed");
 }
 
 export type WaitMode = "all" | "hold" | "any";
@@ -338,7 +583,7 @@ export async function waitForTerminal(
 	for (;;) {
 		const lanes = readManifest(workDir, wave).lanes;
 		const now = Date.now();
-		const statuses = lanes.map((lane) => deriveLane(lane, now));
+		const statuses = deriveLanes(lanes, now);
 		const woken =
 			mode === "any"
 				? statuses.some(terminal)
@@ -466,7 +711,7 @@ export function scanWaves(workDirs: string[], selfSid: string, currentHost: stri
 					ok: true,
 					wave,
 					workDir,
-					statuses: m.lanes.map((l) => deriveLane(l, now)),
+					statuses: deriveLanes(m.lanes, now),
 					priorSession: owner === "dead" || owner === "unknown",
 					createdAt: m.createdAt,
 				});

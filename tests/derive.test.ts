@@ -7,7 +7,7 @@ import { spawn, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { type LaneRecord, type Manifest, deriveLane, deriveTrace, finalAssistantText, pidAlive, psLstart, readManifest, scanWaves, waveSlugsIn, waveTerminal, waitForTerminal, writeManifestAtomic } from "../src/derive.ts";
+import { type LaneRecord, type Manifest, deriveLane, deriveLanes, deriveTrace, finalAssistantText, groupAlive, laneEvents, pidAlive, psLstart, psLstartBatch, readManifest, scanWaves, waveSlugsIn, waveTerminal, waitForTerminal, writeManifestAtomic } from "../src/derive.ts";
 import { parseEvents } from "../src/events.ts";
 
 let failures = 0;
@@ -20,10 +20,14 @@ function check(name: string, cond: boolean, detail?: string) {
 }
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-minimal-dispatch-test-"));
-const eventsPath = path.join(tmp, "lane.events.jsonl");
+let eventsPath = path.join(tmp, "lane.events.jsonl");
 const errPath = path.join(tmp, "lane.err");
+let eventsSeq = 0;
 
+// A fresh file per write: transcripts are append-only single-writer streams, and the
+// derive cache (rightly) treats a rewrite as shrink-reset or append, never replace.
 function writeEvents(lines: string[], truncated = false) {
+	eventsPath = path.join(tmp, `lane-${++eventsSeq}.events.jsonl`);
 	fs.writeFileSync(eventsPath, lines.join("\n") + (truncated ? "" : "\n"));
 }
 
@@ -364,7 +368,7 @@ writeAnyEvents(fastLane, runningEvents);
 writeAnyEvents(slowLane, runningEvents);
 writeAnyManifest();
 {
-	const timer = setTimeout(() => writeAnyEvents(fastLane, [sessionHeader, { type: "agent_settled" }]), 150);
+	const timer = setTimeout(() => fs.appendFileSync(fastLane.eventsPath, JSON.stringify({ type: "agent_settled" }) + "\n"), 150);
 	const t0 = Date.now();
 	const statuses = await waitForTerminal(workDir3, "any", 10000, 50, undefined, "any");
 	clearTimeout(timer);
@@ -383,7 +387,7 @@ writeAnyManifest();
 writeAnyEvents(fastLane, runningEvents);
 writeAnyManifest();
 {
-	const timer = setTimeout(() => writeAnyEvents(fastLane, [sessionHeader, { type: "agent_settled" }]), 150);
+	const timer = setTimeout(() => fs.appendFileSync(fastLane.eventsPath, JSON.stringify({ type: "agent_settled" }) + "\n"), 150);
 	const t0 = Date.now();
 	const statuses = await waitForTerminal(workDir3, "any", 400, 50, undefined, "all");
 	clearTimeout(timer);
@@ -399,8 +403,8 @@ writeAnyManifest();
 }
 
 // wait-any: every lane already terminal returns immediately, as wait-all does.
-writeAnyEvents(fastLane, [sessionHeader, { type: "agent_settled" }]);
-writeAnyEvents(slowLane, [sessionHeader, { type: "agent_settled" }]);
+fs.writeFileSync(fastLane.eventsPath, JSON.stringify(sessionHeader) + "\n" + JSON.stringify({ type: "agent_settled" }) + "\n");
+fs.appendFileSync(slowLane.eventsPath, JSON.stringify({ type: "agent_settled" }) + "\n");
 writeAnyManifest();
 {
 	const t0 = Date.now();
@@ -532,6 +536,142 @@ fs.rmSync(workDir3, { recursive: true, force: true });
 		beta.ok === false && typeof beta.error === "string" && beta.error.length > 0,
 		JSON.stringify(beta),
 	);
+}
+
+// --- incremental transcript cache + batched liveness -------------------------
+
+{
+	const inc = path.join(tmp, "inc.events.jsonl");
+	const endLine = assistantEnd({ input: 4 }, "stop", { model: "m1" });
+	fs.writeFileSync(inc, `${session}\n${turn}\n`);
+	let st = laneEvents(inc);
+	check("laneEvents: initial parse folds the stream", st.events.length === 2 && st.fold.turns === 1 && st.fold.lastText === "");
+	fs.appendFileSync(inc, endLine.slice(0, -5)); // a torn appended tail
+	st = laneEvents(inc);
+	check("laneEvents: a torn appended tail is held back", st.events.length === 2 && st.fold.usage.input === 0);
+	fs.appendFileSync(inc, `${endLine.slice(-5)}\n`); // completing the line
+	st = laneEvents(inc);
+	check("laneEvents: completing the torn line folds it in", st.events.length === 3 && st.fold.usage.input === 4 && st.fold.stopReason === "stop");
+	fs.writeFileSync(inc, `${session}\n`); // a shrink rewrites the stream
+	st = laneEvents(inc);
+	check("laneEvents: a shrink resets the entry", st.events.length === 1 && st.fold.turns === 0);
+}
+
+{
+	const p = path.join(tmp, "final-line.events.jsonl");
+	fs.writeFileSync(p, `${session}\n${turn}`); // complete JSON, no trailing newline
+	check("parseEvents keeps a complete final line that lacks its newline", parseEvents(p).length === 2);
+}
+
+{
+	const p = path.join(tmp, "corrupt.events.jsonl");
+	fs.writeFileSync(p, `${session}\n{oops\n${turn}\n`);
+	const s = deriveLane(lane({ eventsPath: p, pid: deadPid }), Date.now());
+	check(
+		"deriveLane fails soft on a corrupt transcript: failed/crashed, error names the fix",
+		s.state === "failed" && s.cause === "crashed" && /corrupt event line 2/.test(s.errTail ?? "") && /kill\/collect\/release remain available/.test(s.errTail ?? ""),
+		JSON.stringify(s.errTail),
+	);
+}
+
+{
+	const probe = psLstartBatch([process.pid, deadPid]);
+	check(
+		"psLstartBatch: live pid listed with its lstart, dead pid absent",
+		probe.get(process.pid) === psLstart(process.pid) && !probe.has(deadPid),
+		JSON.stringify([...probe.keys()]),
+	);
+	check(
+		"psLstartBatch: a mixed live + out-of-range batch still lists the live pid",
+		psLstartBatch([process.pid, 1e9]).get(process.pid) === psLstart(process.pid),
+		"the out-of-range pid would kill the whole batch without the MAX_PID filter",
+	);
+}
+
+{
+	const gchild = spawn("sleep", ["5"], { detached: true, stdio: "ignore" });
+	gchild.unref();
+	await new Promise((r) => setTimeout(r, 200));
+	const before = groupAlive(gchild.pid!);
+	process.kill(-gchild.pid!, "SIGKILL");
+	await new Promise((r) => setTimeout(r, 200));
+	check("groupAlive: a live detached group is alive, a killed one is not", before === true && groupAlive(gchild.pid!) === false);
+}
+
+{
+	const ep = path.join(tmp, "big.err");
+	fs.writeFileSync(ep, `${Array.from({ length: 12 }, () => "x".repeat(500)).join("\n")}\n`);
+	const s = deriveLane(lane({ eventsPath: path.join(tmp, "no-events.jsonl"), errPath: ep, pid: deadPid }), Date.now());
+	const lines = (s.errTail ?? "").split("\n");
+	check(
+		"errTail: last 5 lines only, each width-capped",
+		s.cause === "crashed" && lines.length === 5 && lines.every((l) => l.length === 301 && l.endsWith("…")),
+		`first line ${lines[0]?.length} chars, ${lines.length} lines`,
+	);
+}
+
+{
+	const d = fs.mkdtempSync(path.join(os.tmpdir(), "pimd-manifest-"));
+	const mp = path.join(d, "w-manifest.json");
+	fs.writeFileSync(mp, "");
+	let msg = "";
+	try {
+		readManifest(d, "w");
+	} catch (e: any) {
+		msg = e.message;
+	}
+	check("readManifest: an empty manifest names the mid-publish window", /is empty — a dispatch may be mid-publish; retry/.test(msg), msg);
+	fs.writeFileSync(mp, "{oops");
+	msg = "";
+	try {
+		readManifest(d, "w");
+	} catch (e: any) {
+		msg = e.message;
+	}
+	check("readManifest: invalid JSON names the path", msg.includes(mp) && /invalid manifest JSON/.test(msg), msg);
+	fs.rmSync(d, { recursive: true, force: true });
+}
+
+{
+	const settledPath = path.join(tmp, "sweep-settled.events.jsonl");
+	fs.writeFileSync(settledPath, `${session}\n{"type":"agent_settled","aborted":false}\n`);
+	const sweepLanes = [
+		lane({ name: "dead", eventsPath: path.join(tmp, "sweep-dead.events.jsonl"), pid: deadPid }),
+		lane({ name: "alive-settled", eventsPath: settledPath, pid: process.pid, processStart: psLstart(process.pid) }),
+		lane({ name: "unspawned", spawned: false, spawnError: "x" }),
+	];
+	const sweep = deriveLanes(sweepLanes, Date.now());
+	const singles = sweepLanes.map((l) => deriveLane(l, Date.now()));
+	check(
+		"deriveLanes: one sweep derives what per-lane calls derive",
+		sweep.every((s, i) => s.state === singles[i].state && s.cause === singles[i].cause && s.turns === singles[i].turns && s.model === singles[i].model),
+		JSON.stringify(sweep.map((s) => `${s.name}:${s.state}`)),
+	);
+}
+
+{
+	// A tombstone is authoritative in sweeps even while a group member lingers.
+	const tombEvents = path.join(tmp, "tomb.events.jsonl");
+	fs.writeFileSync(tombEvents, `${session}\n`);
+	const tomb = lane({ name: "tomb", eventsPath: tombEvents, pid: process.pid, processStart: psLstart(process.pid), killedAt: new Date().toISOString() });
+	const sweepTomb = deriveLanes([tomb], Date.now());
+	check(
+		"deriveLanes: a tombstoned lane derives killed, not running",
+		sweepTomb[0].state === "failed" && sweepTomb[0].cause === "killed",
+		JSON.stringify(sweepTomb[0]),
+	);
+}
+
+{
+	// Slug reuse after release: a recreated file (new inode) must reset, not extend.
+	const reuse = path.join(tmp, "reuse.events.jsonl");
+	fs.writeFileSync(reuse, `${session}\n`);
+	laneEvents(reuse);
+	fs.rmSync(reuse);
+	const longLine = JSON.stringify({ type: "turn_start" });
+	fs.writeFileSync(reuse, `${longLine}\n${longLine}\n${longLine}\n${longLine}\n`); // larger than the old offset
+	const st = laneEvents(reuse);
+	check("laneEvents: a recreated file resets the entry", st.events.length === 4 && st.fold.turns === 4, `${st.events.length} events`);
 }
 
 fs.rmSync(tmp, { recursive: true, force: true });

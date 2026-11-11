@@ -124,7 +124,7 @@ Per-lane `structuredContent` entries. Note: `settled` only means the
 | `lastEventAgeSec` | number? | seconds since the events file last grew — the stuck-lane signal |
 | `inflightTool` | string? | the lane's current tool — the latest `tool_execution_start` with no matching `_end` (`_start` carries no timestamp, so no tool age is derivable) |
 | `spawnError` | string? | why a `spawn`-failed lane never started |
-| `errTail` | string? | last lines of `.err` for `crashed` lanes |
+| `errTail` | string? | last ≤5 `.err` lines for `crashed` lanes, each width-capped — a corrupt transcript names its parse error here and the lane derives `failed`/`crashed` (fail-soft per lane: kill, collect, and release stay available for the wave) |
 
 ### `wait`
 
@@ -160,9 +160,12 @@ A `lane` filter is not offered on `wait`: first-settlement plus a bounded
 ### `kill`
 
 SIGTERM to each eligible lane's process group (never a
-start-time-mismatched/reused PID; settled lanes skipped), SIGKILL after the
-`killGraceMs` config grace, then a manifest tombstone so the kill survives
-re-adoption. Idempotent; honors tool-call cancellation during the grace wait.
+start-time-mismatched/reused PID; settled lanes skipped). The grace to
+SIGKILL watches the whole process group, not the `timeout` leader: the leader
+may die on the SIGTERM while a TERM-immune member lingers, and only a
+group-empty check ends the grace early. Then a manifest tombstone so the kill
+survives re-adoption. Idempotent; a cancelled call escalates at once —
+cancellation stops the waiting, never the kill.
 Waves owned by a **live foreign session** are refused (see `release` for the
 owner rules); killing your own wave or a provably-dead owner's runaway leash
 is unaffected.

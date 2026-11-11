@@ -20,9 +20,11 @@ import {
 	type Manifest,
 	artifactPathFor,
 	currentOwner,
+	deriveLanes,
 	deriveLane,
 	deriveTrace,
-	finalAssistantText,
+	groupAlive,
+	laneEvents,
 	manifestPathFor,
 	ownerGuard,
 	parseEvents,
@@ -230,8 +232,10 @@ const dispatchTool = defineTool({
 		}
 
 		try {
-			fs.writeSync(claimFd, JSON.stringify(manifest, null, "\t"));
+			// The wx claim was only the lock; the content lands by atomic rename so a
+			// concurrent reader never sees a half-written manifest.
 			fs.closeSync(claimFd);
+			writeManifestAtomic(manifest);
 		} catch (e) {
 			// environmental failure after the claim: free the slug and stop already-spawned lanes
 			for (const l of manifest.lanes) {
@@ -325,7 +329,7 @@ const lanesTool = defineTool({
 
 		if (action === "status") {
 			const now = Date.now();
-			const statuses = manifest.lanes.map((l) => deriveLane(l, now));
+			const statuses = deriveLanes(manifest.lanes, now);
 			return {
 				content: [{ type: "text", text: formatWaveStatus(params.wave, statuses) }],
 				structuredContent: { wave: params.wave, lanes: statuses },
@@ -349,10 +353,11 @@ const lanesTool = defineTool({
 			const guard = ownerGuard(manifest.owner, ctx.sessionManager.getSessionId(), hostname(), params.wave);
 			if (!guard.ok) throw new Error(guard.reason);
 			const killed: string[] = [];
+			const settled = new Set(deriveLanes(manifest.lanes, Date.now()).filter((s) => s.state === "settled").map((s) => s.name));
 			const targets = selectKillTargets(
 				manifest.lanes,
 				(l) => pidAlive(l.pid!, l.processStart), // never signal a reused PID
-				(l) => deriveLane(l, Date.now()).state === "settled",
+				(l) => settled.has(l.name),
 				filterNames,
 			);
 			try {
@@ -371,23 +376,23 @@ const lanesTool = defineTool({
 				throw e;
 			}
 			if (killed.length > 0) {
+				// The leash watches the process GROUP: the timeout leader may die on SIGTERM
+				// while a TERM-immune member lingers — leader-pid liveness would end the grace early.
 				const deadline = Date.now() + cfg.killGraceMs;
-				while (Date.now() < deadline) {
-					if (signal?.aborted) break;
-					await new Promise((r) => setTimeout(r, 200));
-					// The grace loop watches only this call's target set: an untargeted lane
-					// tombstoned earlier dies on its own schedule, unwatched here.
-					const survivors = targets.filter(
-						(l) => l.killedAt !== undefined && l.pid !== null && pidAlive(l.pid, l.processStart),
-					);
+				for (;;) {
+					const survivors = targets.filter((l) => l.killedAt !== undefined && l.pid !== null && groupAlive(l.pid));
 					if (survivors.length === 0) break;
-					if (Date.now() + 200 >= deadline) {
+					// Cancellation stops the waiting, not the kill — escalate at once, never
+					// abandon a half-killed lane with a tombstone claiming it died.
+					if (signal?.aborted || Date.now() + 200 >= deadline) {
 						for (const l of survivors) {
 							try {
 								process.kill(-l.pid!, "SIGKILL");
 							} catch {}
 						}
+						break;
 					}
+					await new Promise((r) => setTimeout(r, 200));
 				}
 				writeManifestAtomic(manifest);
 			}
@@ -438,8 +443,9 @@ const lanesTool = defineTool({
 		const results: Array<{ name: string; artifact?: string; suspect?: boolean; suspectCause?: string; reason?: string; stopReason?: string }> = [];
 		const contents = new Map<string, string>(); // display-only: artifact content never enters structuredContent
 		const snapshot: CollectSnapshotEntry[] = []; // details-only: the expanded TUI block renders this, never disk
-		for (const lane of collectScope) {
-			const status = deriveLane(lane, Date.now());
+		const collectStatuses = deriveLanes(collectScope, Date.now());
+		for (const [i, lane] of collectScope.entries()) {
+			const status = collectStatuses[i];
 			if (status.cause === "spawn") {
 				results.push({ name: lane.name, reason: "never spawned — refused" });
 				continue;
@@ -448,7 +454,11 @@ const lanesTool = defineTool({
 				results.push({ name: lane.name, reason: "still running — refused" });
 				continue;
 			}
-			const text = finalAssistantText(parseEvents(lane.eventsPath));
+			// A corrupt transcript collects an empty suspect artifact — the wave stays releasable.
+			let text = "";
+			try {
+				text = laneEvents(lane.eventsPath).fold.lastText;
+			} catch {}
 			const { suspect, cause } = suspectOf(status, text);
 			const artifact = artifactPathFor(manifest, lane);
 			const written = text.endsWith("\n") || text === "" ? text : text + "\n";
@@ -490,7 +500,7 @@ let uiCtx: UiCtx | null = null;
 function statusBarTick(): void {
 	const ctx = uiCtx;
 	if (ctx === null) return;
-	const all: StatusBarEntry[] = [];
+	const tagged: Array<{ lane: LaneRecord; wave: string }> = [];
 	for (const [wave, workDir] of tracked) {
 		if (!fs.existsSync(manifestPathFor(workDir, wave))) {
 			tracked.delete(wave); // the wave was cleaned up
@@ -499,11 +509,15 @@ function statusBarTick(): void {
 		try {
 			const m = readManifest(workDir, wave);
 			// wave-tagged so the footer can name the lone running lane
-			all.push(...m.lanes.map((l) => ({ ...deriveLane(l, Date.now()), wave: m.wave })));
+			tagged.push(...m.lanes.map((l) => ({ lane: l, wave: m.wave })));
 		} catch {
-			// corrupt manifest/events: skipped this tick — /lanes and the lanes tool surface the error loudly
+			// corrupt manifest: skipped this tick — events fail soft into the table;
+			// /lanes and the lanes tool surface the error loudly
 		}
 	}
+	// one derive sweep — one ps probe for every tracked wave's lanes, not one per lane
+	const statuses = deriveLanes(tagged.map((t) => t.lane), Date.now());
+	const all: StatusBarEntry[] = statuses.map((s, i) => ({ ...s, wave: tagged[i].wave }));
 	const summary = formatStatusBarSummary(all);
 	if (summary === undefined) {
 		ctx.ui.setStatus(STATUS_KEY, undefined);
@@ -595,7 +609,9 @@ export default function (pi: ExtensionAPI) {
 				const m = readManifest(workDir, wave); // unknown wave → its error + the usage hint below
 				if (lane === undefined) {
 					const now = Date.now();
-					const lanes = m.lanes.map((l) => ({ status: deriveLane(l, now), eventsPath: l.eventsPath, errPath: l.errPath }));
+					// the sweep makes the tombstone authoritative — a lingering group member of a
+					// killed lane must not read as running
+					const lanes = deriveLanes(m.lanes, now).map((status, i) => ({ status, eventsPath: m.lanes[i].eventsPath, errPath: m.lanes[i].errPath }));
 					const header = formatWaveHeader(wave, m.createdAt, lanes.map((x) => x.status), now);
 					ctx.ui.notify(`${header}\n${formatWaveStatusTui(wave, lanes, renderPath)}`, "info");
 					return;
