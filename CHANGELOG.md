@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.5.1 — 2026-11-11
+
+Performance and hardening — no contract movement: every tool call,
+manifest, and config valid on 0.5.0 keeps its meaning.
+
+- **Derivation is incremental.** Transcripts are stat-gated and parsed from
+  the last confirmed byte (append-only JSONL; a torn trailing line is held
+  back until complete), and one batched `ps` per derivation sweep replaces
+  one synchronous subprocess per alive lane. The statusbar tick and `wait`
+  polls drop from a full re-read of every transcript plus k `ps` spawns per
+  tick to one stat per unchanged lane, one tail-read per grown one, and one
+  `ps` for the whole sweep — settled and tombstoned lanes are not probed at
+  all, so an unreleased finished wave costs a handful of stats per tick.
+- **The kill leash watches the process group, not the `timeout` leader.** A
+  TERM-immune group member can no longer outlive the grace while the leader
+  dies on the SIGTERM and the escalation never fires; and a cancelled kill
+  escalates to SIGKILL at once — cancellation stops the waiting, never the
+  kill.
+- **The manifest publishes atomically** (the `wx` claim stays the lock; the
+  content lands by rename), and reading an empty claimed manifest names the
+  mid-publish window instead of a raw `SyntaxError`. A corrupt transcript
+  line fails soft per lane — the lane derives `failed`/`crashed` with the
+  parse error in its err tail, and kill, collect, and release keep working
+  for the wave (collect writes an empty suspect artifact, so the wave stays
+  releasable).
+- **`.err` tails are bounded**: a tail read of the last 8 KiB, last 5 lines,
+  each line width-capped — a crash loop can no longer push unbounded bytes
+  into every status table.
+- A complete final JSONL line that merely lacks its newline is now kept (a
+  writer caught between payload and newline); a torn one is still skipped.
+
 ## 0.5.0 — 2026-11-10
 
 - The package now publishes as `@zhtmike/pi-minimal-dispatch`; install

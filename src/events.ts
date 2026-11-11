@@ -27,25 +27,58 @@ export type StreamMessage = {
 export type LaneEvent = { type: string } & Record<string, unknown>;
 
 /**
- * Parse a lane's JSONL event file. A trailing line lacking its newline is a
- * SIGTERM-truncated write and is skipped; any other unparseable line is
- * corruption and throws. Returns [] when the file does not exist yet.
+ * Parse a lane's JSONL event file. A trailing line lacking its newline is kept
+ * only when it is already complete JSON (a writer caught between payload and
+ * newline); a torn one is skipped. Any other unparseable line is corruption
+ * and throws. Returns [] when the file does not exist yet.
  */
 export function parseEvents(eventsPath: string): LaneEvent[] {
 	if (!fs.existsSync(eventsPath)) return [];
 	const raw = fs.readFileSync(eventsPath, "utf8");
 	if (raw === "") return [];
-	const lines = raw.endsWith("\n") ? raw.slice(0, -1).split("\n") : raw.split("\n").slice(0, -1);
 	const events: LaneEvent[] = [];
-	for (let i = 0; i < lines.length; i++) {
-		if (lines[i] === "") continue;
-		try {
-			events.push(JSON.parse(lines[i]) as LaneEvent);
-		} catch (e: any) {
-			throw new Error(`corrupt event line ${i + 1} in ${eventsPath}: ${e.message}`);
-		}
-	}
+	parseEventsTail(raw, events, 0, eventsPath);
 	return events;
+}
+
+/**
+ * Parse appended JSONL bytes onto `events` (line numbers continue at `lineNo`).
+ * Complete lines parse strictly — a corrupt one throws naming its absolute
+ * line; the final unterminated line is attempted and kept only when already
+ * complete JSON. Returns the bytes consumed and the running line count — a
+ * torn remainder stays unconsumed for the next read.
+ */
+export function parseEventsTail(raw: string, events: LaneEvent[], lineNo: number, eventsPath: string): { consumed: number; lineNo: number } {
+	let consumed = 0;
+	let n = lineNo;
+	let start = 0;
+	while (start < raw.length) {
+		const nl = raw.indexOf("\n", start);
+		const line = nl === -1 ? raw.slice(start) : raw.slice(start, nl);
+		if (nl === -1) {
+			if (line !== "") {
+				try {
+					events.push(JSON.parse(line) as LaneEvent);
+					n++;
+					consumed = raw.length;
+				} catch {
+					// torn write — leave the bytes unconsumed; the next read completes them
+				}
+			}
+			break;
+		}
+		n++;
+		if (line !== "") {
+			try {
+				events.push(JSON.parse(line) as LaneEvent);
+			} catch (e: any) {
+				throw new Error(`corrupt event line ${n} in ${eventsPath}: ${e.message}`);
+			}
+		}
+		consumed = nl + 1;
+		start = nl + 1;
+	}
+	return { consumed, lineNo: n };
 }
 
 /** Narrow an event to an assistant `message_end`, else null. */
