@@ -672,6 +672,22 @@ fs.rmSync(workDir3, { recursive: true, force: true });
 	fs.writeFileSync(reuse, `${longLine}\n${longLine}\n${longLine}\n${longLine}\n`); // larger than the old offset
 	const st = laneEvents(reuse);
 	check("laneEvents: a recreated file resets the entry", st.events.length === 4 && st.fold.turns === 4, `${st.events.length} events`);
+	fs.writeFileSync(reuse, `${session}\n${session}\n${session}\n${session}\n${session}\n${session}\n`); // same inode, larger, different stream
+	const st2 = laneEvents(reuse);
+	check("laneEvents: a same-inode replacement resets via head bytes", st2.events.length === 6 && st2.fold.turns === 0, `${st2.events.length} events`);
+}
+
+{
+	// First observation of an empty file captures no head; the next read must rebuild one.
+	const ef = path.join(tmp, "empty-first.events.jsonl");
+	fs.writeFileSync(ef, "");
+	laneEvents(ef);
+	fs.appendFileSync(ef, `${session}\n${turn}\n`);
+	laneEvents(ef); // extend — head rebuilds from a full parse
+	const efLine = JSON.stringify({ type: "turn_start" });
+	fs.writeFileSync(ef, `${efLine}\n`.repeat(8)); // same inode, larger, different stream
+	const st3 = laneEvents(ef);
+	check("laneEvents: an empty-first-observation entry still resets on replacement", st3.events.length === 8 && st3.fold.turns === 8, `${st3.events.length} events`);
 }
 
 fs.rmSync(tmp, { recursive: true, force: true });

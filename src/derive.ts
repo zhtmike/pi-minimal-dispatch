@@ -390,6 +390,8 @@ type EventsCacheEntry = {
 	mtimeMs: number;
 	/** File identity — a recreated file (slug reuse after release) resets the entry. */
 	ino: number;
+	/** The stream's first bytes — a recycled inode must not pass a different stream as this one. */
+	head: Buffer;
 	lineNo: number;
 	/** Shared read-only with callers; extended in place as the file grows. */
 	events: LaneEvent[];
@@ -398,10 +400,22 @@ type EventsCacheEntry = {
 	folded: number;
 };
 
-// Events files are append-only with a single writer; anything else — shrink, or a new
-// inode from release + slug reuse — resets the entry. Past the cap the table clears.
+// Events files are append-only with a single writer; anything else — shrink, a new inode, or
+// head bytes that stopped matching (release + slug reuse can recycle the inode on Linux) —
+// resets the entry. Past the cap the table clears.
 const eventsCache = new Map<string, EventsCacheEntry>();
 const EVENTS_CACHE_MAX = 64;
+const EVENTS_CACHE_HEAD_BYTES = 64;
+
+/** Read until the buffer is full or the file ends — readSync may return short. */
+function readFullSync(fd: number, buf: Buffer, position: number): void {
+	let read = 0;
+	while (read < buf.length) {
+		const n = fs.readSync(fd, buf, read, buf.length - read, position + read);
+		if (n === 0) break;
+		read += n;
+	}
+}
 
 /**
  * A lane's parsed transcript and derived fold, stat-gated and extended from the
@@ -421,35 +435,37 @@ export function laneEvents(eventsPath: string): LaneEvents {
 	if (entry !== undefined && st.size === entry.size && st.mtimeMs === entry.mtimeMs) {
 		return { events: entry.events, fold: entry.fold, mtimeMs: st.mtimeMs };
 	}
-	const from = entry?.offset ?? 0;
-	let tail: string;
-	if (from === 0) {
-		tail = fs.readFileSync(eventsPath, "utf8");
-	} else {
-		const len = st.size - from;
-		const buf = Buffer.alloc(len);
-		const fd = fs.openSync(eventsPath, "r");
-		try {
-			fs.readSync(fd, buf, 0, len, from);
-		} finally {
-			fs.closeSync(fd);
-		}
-		tail = buf.toString("utf8");
-	}
-	const events = entry?.events ?? [];
-	const before = events.length;
-	let parsed: { consumed: number; lineNo: number };
+	const fd = fs.openSync(eventsPath, "r");
 	try {
-		parsed = parseEventsTail(tail, events, entry?.lineNo ?? 0, eventsPath);
-	} catch (e) {
-		events.length = before; // the shared array must not keep a half-extended prefix
-		throw e;
+		if (entry !== undefined && entry.head.length > 0) {
+			const probe = Buffer.alloc(entry.head.length);
+			readFullSync(fd, probe, 0);
+			if (!probe.equals(entry.head)) entry = undefined; // same path, different stream
+		} else if (entry !== undefined) {
+			entry = undefined; // an empty first observation captured no head to verify — re-parse whole
+		}
+		const from = entry?.offset ?? 0;
+		const buf = Buffer.alloc(Math.max(0, st.size - from));
+		if (buf.length > 0) readFullSync(fd, buf, from);
+		const tail = buf.toString("utf8");
+		const events = entry?.events ?? [];
+		const before = events.length;
+		let parsed: { consumed: number; lineNo: number };
+		try {
+			parsed = parseEventsTail(tail, events, entry?.lineNo ?? 0, eventsPath);
+		} catch (e) {
+			events.length = before; // the shared array must not keep a half-extended prefix
+			throw e;
+		}
+		const fold = entry?.fold ?? emptyFold();
+		foldInto(fold, events, entry?.folded ?? 0);
+		if (eventsCache.get(eventsPath) === undefined && eventsCache.size >= EVENTS_CACHE_MAX) eventsCache.clear();
+		const head = entry !== undefined ? entry.head : Buffer.from(buf.subarray(0, Math.min(buf.length, EVENTS_CACHE_HEAD_BYTES)));
+		eventsCache.set(eventsPath, { offset: from + parsed.consumed, size: st.size, mtimeMs: st.mtimeMs, ino: st.ino, head, lineNo: parsed.lineNo, events, fold, folded: events.length });
+		return { events, fold, mtimeMs: st.mtimeMs };
+	} finally {
+		fs.closeSync(fd);
 	}
-	const fold = entry?.fold ?? emptyFold();
-	foldInto(fold, events, entry?.folded ?? 0);
-	if (eventsCache.get(eventsPath) === undefined && eventsCache.size >= EVENTS_CACHE_MAX) eventsCache.clear();
-	eventsCache.set(eventsPath, { offset: from + parsed.consumed, size: st.size, mtimeMs: st.mtimeMs, ino: st.ino, lineNo: parsed.lineNo, events, fold, folded: events.length });
-	return { events, fold, mtimeMs: st.mtimeMs };
 }
 
 // --- lane status ------------------------------------------------------------
