@@ -8,7 +8,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { type LaneRecord, type Manifest, deriveLane, deriveLanes, deriveTrace, finalAssistantText, groupAlive, laneEvents, pidAlive, psLstart, psLstartBatch, readManifest, scanWaves, waveSlugsIn, waveTerminal, waitForTerminal, writeManifestAtomic } from "../src/derive.ts";
-import { parseEvents } from "../src/events.ts";
+import { parseEvents, parseEventsTail } from "../src/events.ts";
 
 let failures = 0;
 function check(name: string, cond: boolean, detail?: string) {
@@ -555,6 +555,50 @@ fs.rmSync(workDir3, { recursive: true, force: true });
 	fs.writeFileSync(inc, `${session}\n`); // a shrink rewrites the stream
 	st = laneEvents(inc);
 	check("laneEvents: a shrink resets the entry", st.events.length === 1 && st.fold.turns === 0);
+}
+
+{
+	// Regression: consumed was UTF-16 string units stored as a byte offset — one multi-byte
+	// line (a brief echoed in the user message) drifted the resume point into mid-line.
+	const raw = `${session}\n${turn}\n${JSON.stringify({ type: "message_end", message: { role: "user", content: [{ type: "text", text: "…edge 边界 cases examined — 审查…" }] } })}\n`;
+	const out = parseEventsTail(raw, [], 0, "p");
+	check(
+		"parseEventsTail: consumed is a byte offset, not a string index",
+		out.consumed === Buffer.byteLength(raw, "utf8") && out.consumed !== raw.length,
+		`consumed ${out.consumed}, string length ${raw.length}, bytes ${Buffer.byteLength(raw)}`,
+	);
+}
+
+{
+	const inc = path.join(tmp, "utf8.events.jsonl");
+	const echo = JSON.stringify({ type: "message_end", message: { role: "user", content: [{ type: "text", text: "…edge 边界 cases examined — 审查…" }] } });
+	fs.writeFileSync(inc, `${session}\n${turn}\n${echo}\n`);
+	let st = laneEvents(inc);
+	check("laneEvents: multi-byte lines parse on the first read", st.events.length === 3 && st.fold.turns === 1);
+	fs.appendFileSync(inc, `${assistantEnd({ input: 5 }, "stop", { model: "m1" })}\n`);
+	let ok = true;
+	try {
+		st = laneEvents(inc);
+	} catch {
+		ok = false;
+	}
+	check(
+		"laneEvents: an append after multi-byte lines resumes at the byte boundary",
+		ok && st.events.length === 4 && st.fold.usage.input === 5,
+		ok ? `${st.events.length} events` : "threw",
+	);
+}
+
+{
+	const inc = path.join(tmp, "utf8-torn.events.jsonl");
+	const line = JSON.stringify({ type: "message_end", message: { role: "assistant", stopReason: "stop", usage: { input: 6 }, content: [{ type: "text", text: "审查完毕" }] } });
+	const full = Buffer.from(`${session}\n${line}\n`, "utf8");
+	fs.writeFileSync(inc, full.subarray(0, full.length - 8)); // torn inside the trailing multi-byte char
+	let st = laneEvents(inc);
+	check("laneEvents: a torn multi-byte tail is held back", st.events.length === 1);
+	fs.appendFileSync(inc, full.subarray(full.length - 8));
+	st = laneEvents(inc);
+	check("laneEvents: completing the torn multi-byte line folds it in", st.events.length === 2 && st.fold.usage.input === 6);
 }
 
 {

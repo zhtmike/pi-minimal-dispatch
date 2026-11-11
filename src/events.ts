@@ -78,7 +78,9 @@ export function parseEventsTail(raw: string, events: LaneEvent[], lineNo: number
 		consumed = nl + 1;
 		start = nl + 1;
 	}
-	return { consumed, lineNo: n };
+	// Line positions above are string units; the contract is bytes. `\n` never sits inside
+	// a UTF-8 sequence, so the consumed prefix is whole characters and re-encodes exactly.
+	return { consumed: Buffer.byteLength(raw.slice(0, consumed), "utf8"), lineNo: n };
 }
 
 /** Narrow an event to an assistant `message_end`, else null. */
