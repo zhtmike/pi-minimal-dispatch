@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.5.2 — 2026-11-11
+
+Bugfix release, no contract movement.
+
+- **Fixed: incremental derivation misread transcripts containing non-ASCII
+  bytes as corrupt.** `parseEventsTail` reported its consumed position in
+  UTF-16 string units while the derivation cache resumed reads at byte
+  offsets — one multi-byte character (typically the brief's text echoed in
+  the user-message event) made the resume point drift into the middle of a
+  line, so a healthy, fully-parseable stream derived as `failed · crashed`
+  with a bogus `corrupt event line N` naming a fragment of the brief. The
+  drift was deterministic and never healed (the poisoned cache entry kept
+  its offset), and a killed lane still showed `crashed` instead of `killed`
+  because the parse error fired before the tombstone could. `consumed` is
+  now returned as bytes, per its documented contract; a statusbar tick or
+  `wait` poll on such a stream now derives the lane's true state.
+
 ## 0.5.1 — 2026-11-11
 
 Performance and hardening — no contract movement: every tool call,
