@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.5.3 — 2026-11-13
+
+Description-and-docs release, no behavior change. The usage rules that are true
+wherever the tool runs move onto the tool's own agent-facing surfaces — description
+text ships and versions with the behavior it describes, so it cannot drift the way
+guidance payloads do.
+
+- **`dispatch` gains the brief-parking rule.** Briefs are written before the wave
+  is claimed and the workDir is shared across concurrent sessions in the same
+  directory, so brief paths at the workDir root collide — park each session's briefs
+  under its own subdirectory (e.g. `.pi/work/s/<session-id>/`).
+- **`lanes` gains the hand-sweep caution.** Never hand-delete workDir contents
+  while a lane can still be running — the manifest is the only re-adopt record;
+  consume waves instead (collect, then release). Worded as the agent discipline
+  complementing the human escape hatch, not its rival.
+- **`lanes[].thinking` closes its truth-table corner.** Omitted resolves the
+  model's `:level` suffix if present, else pi's configured default thinking level —
+  the model row already stated its own omitted-default, so a lane pinning only a
+  model now has both facts on the params themselves.
+- README's quick-start example moves to a session-subdir briefPath so the package's
+  front door follows its own guidance.
+
 ## 0.5.2 — 2026-11-11
 
 Bugfix release, no contract movement.

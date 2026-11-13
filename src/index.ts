@@ -157,7 +157,8 @@ const dispatchTool = defineTool({
 		"streaming events to <workDir>/<wave>-<name>.events.jsonl. " +
 		"Write briefs first — one brief file per lane is the lane's entire prompt; " +
 		"lanes run with skills unloaded, a read-only tool default, MCP reach only via a route named in tools " +
-		"(else set mcp: false), and never the dispatch tool itself. Every lane in the call is " +
+		"(else set mcp: false), and never the dispatch tool itself. " +
+		"Briefs are written before the wave is claimed and the workDir is shared across sessions, so brief paths at its root collide — park each session's briefs under its own subdirectory (e.g. `.pi/work/s/<session-id>/`). Every lane in the call is " +
 		"spawned — the caller bounds the wave. " +
 		"Then wait with the lanes tool (or poll status); collect artifacts when settled, release the wave when done.",
 	parameters: Type.Object({
@@ -167,7 +168,7 @@ const dispatchTool = defineTool({
 				name: Type.String({ description: "Lane slug (kebab-case, max 64 chars, unique within the wave)" }),
 				briefPath: Type.String({ description: "Path to the lane's brief file (@file prompt)" }),
 				model: Type.Optional(Type.String({ description: "Pin a model id for this lane; omitted: pi's configured default model — not necessarily the dispatcher session's active model. Accepts pi's `id:thinking` suffix (e.g. 'zai/glm-4.6:high')" })),
-				thinking: Type.Optional(stringEnum(["off", "minimal", "low", "medium", "high", "xhigh", "max"], { description: "Pin a thinking level (pi's --thinking vocabulary); wins over any `:level` suffix in model. pi clamps the level to the model's capabilities — status reports the actual level" })),
+				thinking: Type.Optional(stringEnum(["off", "minimal", "low", "medium", "high", "xhigh", "max"], { description: "Pin a thinking level (pi's --thinking vocabulary); wins over any `:level` suffix in model; omitted: the model's `:level` suffix if present, else pi's configured default thinking level. pi clamps the level to the model's capabilities — status reports the actual level" })),
 				deadlineSec: Type.Optional(Type.Number({ description: "Deadline leash in seconds (config default: 900)", minimum: 1 })),
 				tools: Type.Optional(Type.String({ description: "Tool allowlist for --tools; omitted: 'read,grep,find,ls' — add 'bash' when a lane must run commands (bash can write anywhere the dispatcher can — grant it only with cause). Plain names or mcp__/tool patterns only: +name/-name modifiers, shell quoting, and empty lists are rejected. With mcp enabled, MCP/web tools are reachable only through 'codemode' or 'tool_search' named here ('mcp__server__*' entries declare tools directly only for direct-exposure servers)" })),
 				noExtensions: Type.Optional(Type.Boolean({ description: "Pass -ne (drop extensions incl. MCP)" })),
@@ -294,7 +295,8 @@ const lanesTool = defineTool({
 		"briefs/events/err, collect artifacts, and the manifest; refuses unsettled, foreign-owned, and " +
 		"unconsumed waves (a spawned lane's events file present without its collect artifact — collect " +
 		"first; a human may delete the files by hand). " +
-		"Discover waves: ls <workDir>/*-manifest.json.",
+		"Discover waves: ls <workDir>/*-manifest.json. " +
+		"Never hand-delete workDir contents while a lane can still be running — the manifest is the only re-adopt record; consume waves instead (collect, then release).",
 	parameters: Type.Object({
 		wave: Type.String({ description: "Wave slug" }),
 		action: Type.Optional(stringEnum(["status", "wait", "kill", "collect", "release"])),
