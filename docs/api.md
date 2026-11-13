@@ -4,6 +4,11 @@ Full reference for the two tools, their structured outputs, and configuration.
 The lean overview lives in the [README](../README.md); the model-facing
 descriptions live in the tool schemas in [`src/index.ts`](../src/index.ts) —
 this document is the human-facing copy and must stay in sync with both.
+Descriptions are minimal by contract — purpose, workflow skeleton,
+non-inferable semantics, unenforceable warnings; the mechanics below are
+enforced by runtime errors and chained `[next: …]` result hints, not
+schema prose (`waitSec`'s action scoping is the one compatibility
+carve-out that stays prose).
 
 ## `dispatch`
 
@@ -31,10 +36,12 @@ the leash. Events stream to `<workDir>/<wave>-<name>.events.jsonl`.
 **Result:** text summary plus `structuredContent` — `{ wave, manifestPath, lanes[] }`
 with each lane's pid, paths, and deadline. The text ends with a one-line
 `[next: lanes(wave=…, action='wait') …]` hint — the blocking call that replaces
-status polling. The manifest also records the
-dispatcher's `owner` — `{ sid, pid, host, lstart }` — which the `kill` and
-`release` actions use as their ownership guard. Spawned lanes stream events
-immediately; a lane that failed to spawn appears as `SPAWN ERROR: …`.
+status polling. The hints chain the whole workflow through results, not
+schema prose: a `wait` that leaves every lane terminal appends the `collect`
+hint; a `collect` after which release is unblocked appends the `release`
+hint. The manifest also records the dispatcher's `owner` — `{ sid, pid,
+host, lstart }` — which the `kill` and `release` actions use as their
+ownership guard. Spawned lanes stream events immediately; a lane that failed to spawn appears as `SPAWN ERROR: …`.
 
 **Errors** (the whole call fails, zero lanes spawned, no slug claimed):
 a brief file missing (all missing paths listed as resolved absolute paths —
@@ -157,6 +164,10 @@ return immediately.
 A `lane` filter is not offered on `wait`: first-settlement plus a bounded
 `waitSec` covers the early-action need.
 
+A result with every lane terminal (`settled` or `failed`) ends with the
+`[next: … collect …]` hint — collect works on failed lanes too, marking
+their artifacts suspect.
+
 ### `kill`
 
 SIGTERM to each eligible lane's process group (never a
@@ -195,7 +206,13 @@ informational rendering, not a frozen vocabulary; the boolean is the stable
 flag. Treat a suspect artifact as **not done** and read the file only to judge
 it, don't paste it back into the conversation. A refused lane (still running /
 never spawned) is a **successful** tool result carrying a per-lane `reason`,
-not an error.
+not an error. A collect after which release is unblocked — every lane terminal
+and no unconsumed transcript anywhere in the wave, the wave's own
+preconditions rather than this call's scope, so a `lane`-filtered subset
+collect on a multi-lane wave does not chain a refusing release — ends with
+the `[next: … release …]` hint; release deletes the artifacts too, so copy
+out anything still needed first. The ownership guard applies too: a live
+foreign session's collect carries no release hint.
 
 `inlineMaxBytes: N` (default 0 — never inline) inlines a non-suspect lane's
 artifact content after its line in the text output when the artifact is ≤ N

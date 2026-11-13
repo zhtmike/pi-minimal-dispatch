@@ -9,6 +9,7 @@ import {
 	COLLECT_SNAPSHOT_MAX_BYTES,
 	IDLE_AFTER_SEC,
 	TRACE_SNIPPET_CHARS,
+	collectNextHint,
 	collectSnapshotEntry,
 	displayPath,
 	dispatchNextHint,
@@ -28,6 +29,7 @@ import {
 	plainPath,
 	snippet,
 	suspectOf,
+	waitNextHint,
 } from "../src/format.ts";
 
 let failures = 0;
@@ -72,6 +74,22 @@ check(
 		hint.includes("blocks until every lane settles or any fails") &&
 		hint.endsWith("]") && !hint.includes("\n"),
 	hint,
+);
+
+const wHint = waitNextHint("survey");
+check(
+	"wait hint: one bracketed line chaining collect after a terminal wait",
+	wHint.startsWith("[next: lanes(wave='survey', action='collect')") &&
+		wHint.endsWith("]") && !wHint.includes("\n"),
+	wHint,
+);
+
+const cHint = collectNextHint("survey");
+check(
+	"collect hint: one bracketed line chaining release, naming artifact deletion",
+	cHint.startsWith("[next: lanes(wave='survey', action='release')") &&
+		cHint.includes("artifacts") && !cHint.includes("\n"),
+	cHint,
 );
 
 // --- statusbar: badges, telemetry, composition -------------------------------
