@@ -18,6 +18,7 @@ import {
 	releasePaths,
 	releaseWave,
 	unconsumedTranscripts,
+	releaseUnblocked,
 	waveTerminal,
 } from "../src/derive.ts";
 
@@ -186,6 +187,20 @@ check(
 	JSON.stringify(unconsumedTranscripts(partialWave)) === JSON.stringify(["p2"]),
 	JSON.stringify(unconsumedTranscripts(partialWave)),
 );
+
+// --- releaseUnblocked (the collect→release hint gate) -----------------------
+
+check(
+	"releaseUnblocked: terminal wave with no spawned lanes (never-spawned lane never blocks)",
+	releaseUnblocked(settled, Date.now()) === true,
+);
+check("releaseUnblocked: running wave never unblocks", releaseUnblocked(running, Date.now()) === false);
+check(
+	"releaseUnblocked: subset collect on a multi-lane wave is not unblocked — the hint must not name a refusing release",
+	releaseUnblocked(partialWave, Date.now()) === false,
+);
+fs.writeFileSync(path.join(tmp, "w-p2.md"), "collected\n");
+check("releaseUnblocked: last artifact lands → unblocked", releaseUnblocked(partialWave, Date.now()) === true);
 
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(failures === 0 ? "\nall passed" : `\n${failures} FAILED`);

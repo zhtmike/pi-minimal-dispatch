@@ -14,6 +14,16 @@ them; fix the disagreement, not just the code. The tool schemas in
 three in sync in the same change. Schemas carry constraints, docs/api.md
 carries mechanics and recipes — schema prose never duplicates the reference.
 
+Descriptions stay minimal: purpose, workflow skeleton, semantics the
+parameter names and enums don't already carry, and warnings no code can
+enforce — nothing else. A rule a runtime error already restates is a
+defect, not a constraint: mechanics are code first (validation errors that
+name the fix, `[next: …]` hints chaining the next action, self-labeling
+outputs) and docs second — the calling model reads only schemas and runtime
+messages, so model-facing knowledge never lands in docs alone. Schema
+tokens ride every request of every session, paid even when no wave is ever
+dispatched — an edit that grows a description past that core is a defect.
+
 ## Layout
 
 - `src/index.ts` — tool definitions, detached spawning, wait/kill/collect/release actions, statusbar + `/lanes`

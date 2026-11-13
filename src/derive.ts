@@ -570,9 +570,19 @@ export function deriveLanes(lanes: LaneRecord[], now: number): LaneStatus[] {
 	});
 }
 
+/** Whether a lane state will not change on its own — the wait/terminal family's one predicate. */
+export function terminalState(s: LaneStatus): boolean {
+	return s.state === "settled" || s.state === "failed";
+}
+
 /** Whether every lane of a wave has reached a terminal state (`settled` or `failed`). */
 export function waveTerminal(lanes: LaneRecord[], now: number): boolean {
-	return deriveLanes(lanes, now).every((s) => s.state === "settled" || s.state === "failed");
+	return deriveLanes(lanes, now).every(terminalState);
+}
+
+/** Release's wave-intrinsic refusals only — every lane terminal, no unconsumed transcript; the caller-relative ownership guard composes at the call site. */
+export function releaseUnblocked(m: Manifest, now: number): boolean {
+	return waveTerminal(m.lanes, now) && unconsumedTranscripts(m).length === 0;
 }
 
 export type WaitMode = "all" | "hold" | "any";
@@ -594,7 +604,6 @@ export async function waitForTerminal(
 	signal?: AbortSignal,
 	mode: WaitMode = "all",
 ): Promise<LaneStatus[]> {
-	const terminal = (s: LaneStatus) => s.state === "settled" || s.state === "failed";
 	const deadline = Date.now() + waitMs;
 	for (;;) {
 		const lanes = readManifest(workDir, wave).lanes;
@@ -602,9 +611,9 @@ export async function waitForTerminal(
 		const statuses = deriveLanes(lanes, now);
 		const woken =
 			mode === "any"
-				? statuses.some(terminal)
+				? statuses.some(terminalState)
 				: mode === "hold"
-					? statuses.every(terminal)
+					? statuses.every(terminalState)
 					: statuses.every((s) => s.state === "settled") || statuses.some((s) => s.state === "failed");
 		if (woken || now >= deadline || signal?.aborted) {
 			return statuses;

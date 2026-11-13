@@ -105,6 +105,16 @@ export function dispatchNextHint(wave: string): string {
 	);
 }
 
+/** One bracketed line appended to a wait result that left nothing to wait for — collect is unblocked. */
+export function waitNextHint(wave: string): string {
+	return `[next: lanes(wave='${wave}', action='collect') — writes each lane's final message to an artifact; release the wave when done]`;
+}
+
+/** One bracketed line appended to a fully-collected result — release is unblocked and deletes the artifacts too. */
+export function collectNextHint(wave: string): string {
+	return `[next: lanes(wave='${wave}', action='release') — deletes the wave's files including the artifacts; copy out anything you still need]`;
+}
+
 // --- statusbar footer -------------------------------------------------------
 
 /** Footer entry: a lane status tagged with its wave — the tick knows the manifest. */

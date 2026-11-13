@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.5.4 — 2026-11-13
+
+Prompt-as-code release: the model-facing schema prose shrinks to its irreducible
+core, and the workflow guidance it shed moves onto the tool's own runtime
+surfaces — validation errors already named their fixes, and results now chain
+the next action. Schema tokens ride every request of every session, paid even
+when no wave is ever dispatched, so description bulk is a per-request tax on
+every conversation that loads the extension.
+
+- **`wait` and `collect` results chain `[next: …]` hints, gated on the next
+  action being unblocked.** A wait that leaves every lane terminal appends
+  the collect hint; a collect after which release is unblocked — every lane
+  terminal and no unconsumed transcript anywhere in the wave, plus the
+  ownership guard release itself applies, its own preconditions rather than
+  the call's scope, so a `lane`-filtered subset collect does not chain a
+  refusing release — appends the release hint,
+  naming that release deletes the artifacts too. Guidance arrives
+  just-in-time — exactly when the next action unblocks — instead of as
+  static prose paid on every request.
+- **Descriptions minimized to the irreducible core** (schema prose roughly
+  halved, ≈1080 → ≈460 tokens): purpose, workflow skeleton, semantics the
+  parameter names and enums don't already carry, and warnings no code can
+  enforce. Everything dropped is enforced by a refusal that names the fix
+  (slug rules, tools syntax, action×param compatibility, release
+  preconditions, wave discovery) or self-labeled in the outputs (status
+  fields, suspect flags).
+- **AGENTS.md pins the contract** so it cannot regress: mechanics are code
+  first (errors that name the fix, `[next: …]` hints, self-labeling outputs)
+  and docs second; the calling model reads only schemas and runtime messages,
+  so model-facing knowledge never lands in docs alone; an edit that grows a
+  description past that core is a defect.
+- **README gains a drop-in when-to-dispatch policy block.** Usage policy
+  (fan out vs. stay in-session) is the consumer's instruction layer, not the
+  package's schema — the quick-start now ships a copyable block so the
+  judgment is portable without re-widening the descriptions.
+
 ## 0.5.3 — 2026-11-13
 
 Description-and-docs release, no behavior change. The usage rules that are true

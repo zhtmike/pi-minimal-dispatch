@@ -31,8 +31,10 @@ import {
 	pidAlive,
 	psLstart,
 	readManifest,
+	releaseUnblocked,
 	releaseWave,
 	scanWaves,
+	terminalState,
 	unconsumedTranscripts,
 	waitForTerminal,
 	waveSlugsIn,
@@ -46,6 +48,8 @@ import {
 	collectSnapshotEntry,
 	displayPath,
 	dispatchNextHint,
+	waitNextHint,
+	collectNextHint,
 	fileUri,
 	formatCollectExpanded,
 	formatCollectEntry,
@@ -153,26 +157,23 @@ const dispatchTool = defineTool({
 	label: "Dispatch lanes",
 	description:
 		"Spawn detached sub-agent lanes (fresh pi processes) for a wave and return immediately; " +
-		"lanes survive this session's exit. Each lane runs its brief file in its own process group, " +
-		"streaming events to <workDir>/<wave>-<name>.events.jsonl. " +
-		"Write briefs first — one brief file per lane is the lane's entire prompt; " +
-		"lanes run with skills unloaded, a read-only tool default, MCP reach only via a route named in tools " +
-		"(else set mcp: false), and never the dispatch tool itself. " +
-		"Briefs are written before the wave is claimed and the workDir is shared across sessions, so brief paths at its root collide — park each session's briefs under its own subdirectory (e.g. `.pi/work/s/<session-id>/`). Every lane in the call is " +
-		"spawned — the caller bounds the wave. " +
-		"Then wait with the lanes tool (or poll status); collect artifacts when settled, release the wave when done.",
+		"lanes survive this session's exit, and every lane in the call is spawned — no queueing. " +
+		"One brief file per lane is that lane's entire prompt — write briefs first; a lane sees nothing else: " +
+		"no skills, no session context, read-only tools unless granted more, never the dispatch tool. " +
+		"The workDir is shared across sessions — park briefs under a per-session subdirectory (e.g. `.pi/work/s/<session-id>/`). " +
+		"Then wait (lanes action='wait'), collect artifacts when settled, release the wave when done.",
 	parameters: Type.Object({
-		wave: Type.String({ description: "Wave slug (kebab-case, max 64 chars); must not already exist in workDir" }),
+		wave: Type.String({ description: "Wave slug" }),
 		lanes: Type.Array(
 			Type.Object({
-				name: Type.String({ description: "Lane slug (kebab-case, max 64 chars, unique within the wave)" }),
+				name: Type.String({ description: "Lane slug" }),
 				briefPath: Type.String({ description: "Path to the lane's brief file (@file prompt)" }),
-				model: Type.Optional(Type.String({ description: "Pin a model id for this lane; omitted: pi's configured default model — not necessarily the dispatcher session's active model. Accepts pi's `id:thinking` suffix (e.g. 'zai/glm-4.6:high')" })),
-				thinking: Type.Optional(stringEnum(["off", "minimal", "low", "medium", "high", "xhigh", "max"], { description: "Pin a thinking level (pi's --thinking vocabulary); wins over any `:level` suffix in model; omitted: the model's `:level` suffix if present, else pi's configured default thinking level. pi clamps the level to the model's capabilities — status reports the actual level" })),
+				model: Type.Optional(Type.String({ description: "Pin a model id, pi's id:thinking suffix allowed; omitted: pi's configured default — not necessarily this session's active model" })),
+				thinking: Type.Optional(stringEnum(["off", "minimal", "low", "medium", "high", "xhigh", "max"], { description: "Pin a thinking level; wins over model's :level suffix — status reports the actual level" })),
 				deadlineSec: Type.Optional(Type.Number({ description: "Deadline leash in seconds (config default: 900)", minimum: 1 })),
-				tools: Type.Optional(Type.String({ description: "Tool allowlist for --tools; omitted: 'read,grep,find,ls' — add 'bash' when a lane must run commands (bash can write anywhere the dispatcher can — grant it only with cause). Plain names or mcp__/tool patterns only: +name/-name modifiers, shell quoting, and empty lists are rejected. With mcp enabled, MCP/web tools are reachable only through 'codemode' or 'tool_search' named here ('mcp__server__*' entries declare tools directly only for direct-exposure servers)" })),
+				tools: Type.Optional(Type.String({ description: "Tool allowlist, comma-separated; default 'read,grep,find,ls' (read-only — grant 'bash' only with cause)" })),
 				noExtensions: Type.Optional(Type.Boolean({ description: "Pass -ne (drop extensions incl. MCP)" })),
-				mcp: Type.Optional(Type.Boolean({ description: "Set false to pass --no-mcp (no MCP servers connect). Servers connecting alone grants no reach: with mcp enabled, tools must name 'codemode' or 'tool_search' or dispatch rejects the lane" })),
+				mcp: Type.Optional(Type.Boolean({ description: "false: no MCP servers connect" })),
 			}),
 			{ minItems: 1 },
 		),
@@ -275,45 +276,30 @@ const lanesTool = defineTool({
 	name: "lanes",
 	label: "Lane status",
 	description:
-		"Observe/control a dispatched wave. action=status (default): per-lane derived state " +
-		"(starting/running/settled/failed + cause spawn|killed|deadline|crashed), turns, run-total usage, " +
-		"model + thinking level (actual, from the event stream — message_start's model once generation begins, last assistant message once it answers; pinned value before that; [default] in status lines for a pre-generation lane that pins nothing), " +
-		"stopReason, last-event age, in-flight tool name (latest unmatched tool_execution_start), .err tail for crashed lanes. action=wait: hold this call open, " +
-		"re-deriving at the pollMs cadence, until the waitMode wake condition holds (default: every lane settled or any " +
-		"failed — a failure surfaces at the poll cadence, never sat on) or waitSec (default 300, " +
-		"max 3600) elapses — then return the status table; replaces blind sleep-then-status polling. " +
-		"action=kill: SIGTERM the lane process group (escalating to SIGKILL after a grace), start-time guarded; refuses waves owned by a live foreign session; " +
-		"pass lane:[names] to signal only those lanes — untargeted lanes are untouched. " +
-		"action=collect: write each finished lane's final assistant " +
-		"message to <wave>-<name>.md (suspect-flagged on failure/empty/non-clean stopReason); a refusal " +
-		"(running / never spawned) is a successful result with a per-lane reason; pass lane:[names] to collect " +
-		"only those lanes; pass inlineMaxBytes to inline each non-suspect lane's artifact content in the output " +
-		"when it fits within N bytes (suspect artifacts never inline). Stateless: reads the manifest " +
-		"fresh — works across sessions, including after the dispatcher exited. A collected lane is a path plus " +
-		"`suspect`; `suspect: true` means the artifact is not done — read the file only to judge it, do not paste " +
-		"it back. action=release: delete exactly a settled wave's own files — the manifest-enumerated " +
-		"briefs/events/err, collect artifacts, and the manifest; refuses unsettled, foreign-owned, and " +
-		"unconsumed waves (a spawned lane's events file present without its collect artifact — collect " +
-		"first; a human may delete the files by hand). " +
-		"Discover waves: ls <workDir>/*-manifest.json. " +
-		"Never hand-delete workDir contents while a lane can still be running — the manifest is the only re-adopt record; consume waves instead (collect, then release).",
+		"Observe/control a dispatched wave — stateless, works across sessions (reads the manifest fresh, even after the dispatcher exited). " +
+		"action=status (default): per-lane state (starting/running/settled/failed), turns, usage, model, stopReason. " +
+		"action=wait: hold open until every lane settles or any fails (waitSec caps it) — replaces status-poll sleeps. " +
+		"action=kill: stop lanes (SIGTERM, escalating to SIGKILL). " +
+		"action=collect: write each finished lane's final message to an artifact; `suspect: true` means not done — judge it, don't paste it back. " +
+		"action=release: delete the wave's own files. " +
+		"Never hand-delete workDir contents while a lane may still be running — consume waves instead (collect, then release).",
 	parameters: Type.Object({
 		wave: Type.String({ description: "Wave slug" }),
 		action: Type.Optional(stringEnum(["status", "wait", "kill", "collect", "release"])),
 		lane: Type.Optional(
 			Type.Array(Type.String(), {
 				minItems: 1,
-				description: "Target only the named lanes within the wave — kill and collect only (other actions reject it); a bare string is wrapped, an unknown slug is an error listing the wave's lanes",
+				description: "Target only these lanes",
 			}),
 		),
 		waitMode: Type.Optional(
-			stringEnum(["all", "hold", "any"], { description: "wait action only: 'hold' blocks until every lane is terminal — sits out already-known failures while siblings finish; 'any' returns as soon as the first lane is terminal — the returned status table is unchanged" }),
+			stringEnum(["all", "hold", "any"], { description: "'all' (default): every lane settled or any failed · 'hold': sit out known failures until all lanes are terminal · 'any': return at the first terminal lane" }),
 		),
 		waitSec: Type.Optional(Type.Number({ description: "wait action only: max seconds to hold the call open (default 300; 1–3600)", minimum: 1, maximum: 3600 })),
 		inlineMaxBytes: Type.Optional(
 			Type.Integer({
 				minimum: 0,
-				description: "collect action only: inline each non-suspect lane's artifact content after its line when the artifact is ≤ N bytes (default 0 — never inline); over budget it truncates at the last complete character and names the artifact path for the rest",
+				description: "inline each non-suspect artifact's content when it fits in N bytes (default 0 — never inline)",
 			}),
 		),
 		workDir: Type.Optional(Type.String({ description: "Directory holding the manifest (config default: .pi/work)" })),
@@ -342,8 +328,9 @@ const lanesTool = defineTool({
 		if (action === "wait") {
 			// A timeout is a normal status result with running lanes, never an error.
 			const statuses = await waitForTerminal(workDir, params.wave, (params.waitSec ?? 300) * 1000, cfg.pollMs, signal, resolveWaitMode(params.waitMode));
+			// The hint chains the workflow only when nothing is left to wait for.
 			return {
-				content: [{ type: "text", text: formatWaveStatus(params.wave, statuses) }],
+				content: [{ type: "text", text: formatWaveStatus(params.wave, statuses) + (statuses.every(terminalState) ? `\n${waitNextHint(params.wave)}` : "") }],
 				structuredContent: { wave: params.wave, lanes: statuses },
 				details: { wave: params.wave },
 			};
@@ -469,7 +456,14 @@ const lanesTool = defineTool({
 			contents.set(lane.name, written);
 			snapshot.push(collectSnapshotEntry(lane.name, artifact, written));
 		}
-		const text = results.map((r) => formatCollectEntry({ ...r, content: contents.get(r.name) }, inlineMaxBytes)).join("\n");
+		// The hint names release exactly when release would not refuse — wave
+		// preconditions plus the ownership guard, never this call's scope alone.
+		const releaseHintOk =
+			ownerGuard(manifest.owner, ctx.sessionManager.getSessionId(), hostname(), params.wave).ok &&
+			releaseUnblocked(manifest, Date.now());
+		const text =
+			results.map((r) => formatCollectEntry({ ...r, content: contents.get(r.name) }, inlineMaxBytes)).join("\n") +
+			(releaseHintOk ? `\n${collectNextHint(params.wave)}` : "");
 		return {
 			content: [{ type: "text", text: `collect wave '${params.wave}':\n${text}` }],
 			structuredContent: { wave: params.wave, results },

@@ -75,11 +75,13 @@ A real session:
 > lanes     wave="survey" action="wait"
   docs [glm-5.3-flash] · settled · 2 turns · tok 5703in/90out, $0.0009 · stop:stop · last 0.8s ago
   review [glm-4.6] · settled · 4 turns · tok 12021in/310out, $0.0041 · stop:stop · last 2.1s ago
+  [next: lanes(wave='survey', action='collect') — writes each lane's final message to an artifact; release the wave when done]
 
 > lanes     wave="survey" action="collect"
   collect wave 'survey':
     docs: /abs/path/to/.pi/work/survey-docs.md stop:stop
     review: /abs/path/to/.pi/work/survey-review.md stop:stop
+  [next: lanes(wave='survey', action='release') — deletes the wave's files including the artifacts; copy out anything you still need]
 ```
 
 The ceremony: *write briefs → `dispatch` → `wait` (or poll `status`) →
@@ -97,6 +99,28 @@ signal — no event growth for ~2× the lane's normal turn latency ⇒
 `kill` and redispatch. **Failed lanes**: `wait` wakes at the first failure —
 `waitMode: "hold"` sees the running siblings through, or steer: `kill` +
 redispatch under a new slug.
+
+### When to dispatch — a drop-in policy block
+
+The tool schemas deliberately carry no usage policy: when to fan out is
+your layer, not the package's, and shipped descriptions are identical for
+everyone while policy is per-repo taste. The mechanics (dispatch never
+blocks; waiting is the bounded `wait` call) live in the schemas — the
+*judgment* belongs in your agent instructions. Copy and adapt:
+
+```text
+- Dispatch a sub-task when it deserves its own context: read-only
+  exploration before implementing, parallel investigation lanes. Research
+  fan-out is the dispatch pattern; implementation itself stays in the main
+  session as one coherent change.
+- One brief file per lane is its entire prompt — goal, scope, expected
+  deliverable and format, what not to do, and a line stating the addressee
+  is a dispatched leaf with no shared context. Park briefs under a
+  per-session subdirectory (.pi/work/s/<session-id>/).
+- Tier the lane to the job; grant bash only with cause.
+- Consume waves: wait (bounded) → collect → release; never hand-delete
+  workDir contents while a lane may still be running.
+```
 
 ## API
 
