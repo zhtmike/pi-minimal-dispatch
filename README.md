@@ -63,9 +63,9 @@ Wait for them to settle and collect the artifacts.
 A real session:
 
 ```text
-> dispatch  wave="survey" lanes=[{name:"docs", briefPath:".pi/work/survey-docs-brief.md",
+> dispatch  wave="survey" lanes=[{name:"docs", briefPath:".pi/work/s/<session-id>/survey-docs-brief.md",
             model:"zai/glm-5.3-flash", mcp:false},
-            {name:"review", briefPath:".pi/work/survey-review-brief.md", mcp:false}]
+            {name:"review", briefPath:".pi/work/s/<session-id>/survey-review-brief.md", mcp:false}]
   wave 'survey' dispatched — 2/2 lanes spawned
     docs: pid 99015 (deadline 900s)
     review: pid 99016 (deadline 900s)

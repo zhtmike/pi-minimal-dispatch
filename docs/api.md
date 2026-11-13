@@ -19,9 +19,9 @@ the leash. Events stream to `<workDir>/<wave>-<name>.events.jsonl`.
 | `wave` | string | — | Wave slug: `kebab-case`, max 64 chars, must not exist in `workDir` |
 | `lanes` | array | — | One entry per lane (min 1); lane slugs unique within the wave |
 | `lanes[].name` | string | — | Lane slug: `kebab-case`, max 64 chars |
-| `lanes[].briefPath` | string | — | Path to the lane's brief file (its `@file` prompt) |
+| `lanes[].briefPath` | string | — | Path to the lane's brief file (its `@file` prompt). Briefs are written before the wave is claimed and the workDir is shared across concurrent sessions in the same directory, so brief paths at its root collide — park each session's briefs under its own subdirectory (e.g. `.pi/work/s/<session-id>/`) |
 | `lanes[].model` | string? | pi default | Pin a model id; omitted: pi's **configured default model** — not the dispatcher session's active model. Accepts pi's `id:thinking` suffix (e.g. `zai/glm-4.6:high`) |
-| `lanes[].thinking` | `off\|minimal\|low\|medium\|high\|xhigh\|max`? | none | Pin a thinking level (pi's `--thinking`); wins over any `:level` suffix in `model`. pi clamps the level to the model's capabilities — status reports the actual level |
+| `lanes[].thinking` | `off\|minimal\|low\|medium\|high\|xhigh\|max`? | none | Pin a thinking level (pi's `--thinking`); wins over any `:level` suffix in `model`; omitted: the model's `:level` suffix if present, else pi's configured default thinking level. pi clamps the level to the model's capabilities — status reports the actual level |
 | `lanes[].deadlineSec` | number? | `deadlineSec` config (900) | Leash in seconds; holds even if the dispatcher is gone. Minimum 1 |
 | `lanes[].tools` | string? | `read,grep,find,ls` | Tool allowlist for `--tools` — plain names or `*` patterns; no `+name`/`-name` modifiers, no shell quoting, not empty. Add `bash` when a lane must run commands (bash can still invoke git — and can write anywhere the dispatcher can: don't grant it to read-only lanes in a shared checkout; give write-capable lanes a scratch dir outside the repo). With MCP enabled, reach requires `codemode` or `tool_search` here — see [MCP and web reach](#mcp-and-web-reach) |
 | `lanes[].noExtensions` | boolean? | false | Pass `-ne` (drop extensions incl. MCP in the lane) |
@@ -246,7 +246,9 @@ Refused (a thrown error, wave retained) when:
 - the owner record is missing or malformed (pre-owner manifests) — fail
   closed, never guessed.
 
-The refusals bind sessions, not people: a human may always delete by hand.
+The refusals bind sessions, not people: a human may always delete by hand. Agents
+never hand-delete workDir contents while a lane can still be running — the manifest
+is the only re-adopt record; consume waves instead (collect, then release).
 
 ### Recovering partial work
 
