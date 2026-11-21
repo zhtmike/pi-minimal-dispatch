@@ -10,11 +10,13 @@ import * as path from "node:path";
 import {
 	assertActionParams,
 	assertBriefTools,
+	assertDefaultLaneCap,
 	assertLaneTools,
 	assertSlugs,
 	buildLaneArgs,
 	DEFAULT_LANE_TOOLS,
 	defaultWaveOf,
+	isDefaultModelPin,
 	laneEnv,
 	lanesCompletions,
 	missingBriefs,
@@ -477,6 +479,78 @@ check(
 		);
 	})(),
 );
+
+// --- isDefaultModelPin: the cap's tier classification ------------------------
+
+check("isDefaultModelPin: an omitted pin always counts", isDefaultModelPin(undefined, "zai", "glm-5.3") && isDefaultModelPin("", "zai", "glm-5.3"));
+check("isDefaultModelPin: a provider-qualified default pin counts", isDefaultModelPin("zai/glm-5.3", "zai", "glm-5.3"));
+check(
+	"isDefaultModelPin: a :level-suffixed default pin counts (suffix stripped)",
+	isDefaultModelPin("glm-5.3:high", "zai", "glm-5.3") && isDefaultModelPin("zai/glm-5.3:high", "zai", "glm-5.3"),
+);
+check(
+	"isDefaultModelPin: a literal :thinking suffix is not a level word — pi keeps it in the id",
+	!isDefaultModelPin("glm-5.3:thinking", "zai", "glm-5.3"),
+);
+check("isDefaultModelPin: a non-default pin never counts", !isDefaultModelPin("zai/glm-5.3-flash", "zai", "glm-5.3"));
+check(
+	"isDefaultModelPin: a colon suffix that is not a level word stays in the id",
+	isDefaultModelPin("qwen3-coder:exacto", "zai", "qwen3-coder:exacto") && !isDefaultModelPin("qwen3-coder:exacto", "zai", "qwen3-coder"),
+);
+check(
+	"isDefaultModelPin: either setting empty → explicit pins never count, omitted still do",
+	!isDefaultModelPin("glm-5.3", undefined, "glm-5.3") && !isDefaultModelPin("glm-5.3", "zai", undefined) && !isDefaultModelPin("zai/glm-5.3", "", "glm-5.3") && isDefaultModelPin(undefined, undefined, undefined),
+);
+
+// --- assertDefaultLaneCap: the pre-claim refusal -----------------------------
+
+{
+	const lp = (name: string, model?: string): LaneParams => ({ name, briefPath: `/tmp/${name}.md`, ...(model !== undefined ? { model } : {}) });
+	const existing = [
+		{ wave: "w1", lane: { name: "a", model: undefined } }, // inherited default
+		{ wave: "w1", lane: { name: "b", model: "zai/glm-5.3" } }, // explicit default
+		{ wave: "w2", lane: { name: "c", model: "zai/glm-5.3-flash" } }, // other tier — never counts
+	];
+	const cap3 = { cap: 3, existing: () => existing, provider: "zai", model: "glm-5.3" };
+
+	try {
+		assertDefaultLaneCap({ ...cap3, incoming: [lp("x")] }); // 2 existing + 1 new = 3 ≤ 3
+		check("assertDefaultLaneCap: at the cap passes", true);
+	} catch (e: any) {
+		check("assertDefaultLaneCap: at the cap passes", false, e.message);
+	}
+	check(
+		"assertDefaultLaneCap: over the cap refuses naming existing wave/lane and the new lane",
+		throwsWith(
+			() => assertDefaultLaneCap({ ...cap3, incoming: [lp("x"), lp("y")] }),
+			"w1/a",
+			) &&
+			throwsWith(() => assertDefaultLaneCap({ ...cap3, incoming: [lp("x"), lp("y")] }), "w1/b") &&
+			throwsWith(() => assertDefaultLaneCap({ ...cap3, incoming: [lp("x"), lp("y")] }), "y (this wave)") &&
+			throwsWith(() => assertDefaultLaneCap({ ...cap3, incoming: [lp("x"), lp("y")] }), "maxDefaultLanes=3"),
+	);
+	check(
+		"assertDefaultLaneCap: the refusal does not name non-default-tier lanes",
+		!throwsWith(() => assertDefaultLaneCap({ ...cap3, incoming: [lp("x"), lp("y")] }), "w2/c"),
+	);
+	try {
+		assertDefaultLaneCap({ ...cap3, incoming: [lp("x"), lp("y", "zai/glm-5.3-flash"), lp("z", "zai/glm-5.3-flash")] }); // only x counts → 2+1 = 3 ≤ 3
+		check("assertDefaultLaneCap: non-default pins in the new wave do not count", true);
+	} catch (e: any) {
+		check("assertDefaultLaneCap: non-default pins in the new wave do not count", false, e.message);
+	}
+	try {
+		let censusCalled = false;
+		const census = () => {
+			censusCalled = true;
+			return existing;
+		};
+		assertDefaultLaneCap({ cap: 3, existing: census, provider: "zai", model: "glm-5.3", incoming: [lp("x", "other/model"), lp("y", "other/model")] });
+		check("assertDefaultLaneCap: zero incoming default-tier lanes never refuses, no census run", !censusCalled);
+	} catch (e: any) {
+		check("assertDefaultLaneCap: zero incoming default-tier lanes never refuses, no census run", false, e.message);
+	}
+}
 
 console.log(failures === 0 ? "\nall passed" : `\n${failures} FAILED`);
 process.exitCode = failures === 0 ? 0 : 1;

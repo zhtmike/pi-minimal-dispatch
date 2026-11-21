@@ -85,8 +85,9 @@ signal to re-read the positioning above, not to grow the surface.
 
 ## Compatibility posture
 
-- **Floor**: pi ≥ 1.4.0, Node ≥ 22.19.0, POSIX only (process groups, `ps`
-  `-o lstart=`, GNU `timeout`). CI typechecks the host-API surface against
+- **Floor**: pi ≥ 1.4.0, Node ≥ 22.19.0, POSIX only (process groups, GNU
+  `timeout`; process start times from `/proc/<pid>/stat` on Linux,
+  `ps -o lstart=` on macOS). CI typechecks the host-API surface against
   both the 1.4.0 floor and latest pi.
 - **What can break**: the lane protocol rides pi's CLI flags
   (`--mode json --no-session -ns -ne --tools --no-mcp --model --thinking`)

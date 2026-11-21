@@ -23,6 +23,11 @@ export type DispatchConfig = {
 	piBin: string;
 	/** Deadline-leash binary (GNU coreutils `timeout`, or e.g. `gtimeout`). */
 	timeoutBin: string;
+	/**
+	 * Cap on live lanes resolving to pi's configured default model (pinned or
+	 * inherited), running plus the new wave. Absent = no cap.
+	 */
+	maxDefaultLanes?: number;
 };
 
 export const DEFAULT_CONFIG: DispatchConfig = {
@@ -32,6 +37,7 @@ export const DEFAULT_CONFIG: DispatchConfig = {
 	pollMs: 2000,
 	piBin: "pi",
 	timeoutBin: "timeout",
+	maxDefaultLanes: undefined, // the key must be known here for config files to set it
 };
 
 const CONFIG_NAME = "pi-minimal-dispatch.json";
@@ -41,6 +47,7 @@ const MINIMA: Partial<Record<keyof DispatchConfig, number>> = {
 	deadlineSec: 1,
 	killGraceMs: 100,
 	pollMs: 100,
+	maxDefaultLanes: 1,
 };
 
 function readConfigFile(file: string): Record<string, unknown> {

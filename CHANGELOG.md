@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.5.5 — 2026-11-21
+
+Lane-liveness start token fix, plus a configurable default-model lane cap.
+
+**Start token.** Incident (2026-11-20, WSL2): a wave's five lanes were reported
+`failed (crashed)` while every lane process was alive and streaming —
+`ps -o lstart=` renders *now minus process age*, so a wall-clock step (WSL
+sync, NTP) between capture at spawn and a later probe shifts the rendered
+string of a **running** pid (observed 23:01:40 → 23:02:00) and every live
+lane reads dead. The same check governs wave ownership (`kill`/`release`
+guards) and the batched probe. The token is now uptime-based on Linux:
+`processStartId(pid)` reads `/proc/<pid>/stat` field 22 (clock ticks since
+boot; fields counted after the last `)` — comm may contain spaces); macOS
+keeps `ps -o lstart=`. Capture (spawn), probe (`pidAlive`), and the batch
+(`startIdBatch`, a `/proc` loop on Linux — no subprocess) all go through it;
+empty string still means dead/unreadable, never an exception. Migration: the
+recorded token changes kind on Linux (digits, not a date) — old manifests'
+`lstart` strings never match after the upgrade. On WSL they already
+mismatched (the bug); on clock-stable Linux only in-flight waves at upgrade
+time are affected, reading `failed (crashed)` once. Requirements updated
+(README/CONTRIBUTING/design.md): `ps -o lstart=` is a macOS requirement;
+Linux reads `/proc` directly.
+
+**`maxDefaultLanes`.** New config key: refuse a dispatch when lanes resolving
+to pi's configured default model — live in the target workDir plus the new
+wave — would exceed N; the refusal names the lanes and runs before the wave
+slug is claimed, so nothing spawns and no manifest is left behind. Unset
+(default): no cap; settable at either config layer (the census is per-workDir,
+so a project value affects only that project's dispatches). A pin resolves to
+the default model when omitted, or when it equals `provider/model` with its
+`:level` suffix stripped (bare ids compare against `defaultModel`; with either
+setting unset, explicit pins never count — matching pi's own suffix grammar,
+where an invalid suffix stays part of the id). The census counts live lanes
+(pid alive by start token, transcript not settled) across every
+`*-manifest.json` in the workDir — a dead dispatcher's lanes still count, a
+settled-but-unreleased wave does not.
+
 ## 0.5.4 — 2026-11-13
 
 Prompt-as-code release: the model-facing schema prose shrinks to its irreducible
