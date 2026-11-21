@@ -37,8 +37,9 @@ The full design rationale, positioning, and origin story:
 
 ## Requirements
 
-- pi ≥ 1.4.0, **macOS or Linux** (POSIX process groups, `ps -o lstart=`,
-  `timeout` — Windows is not supported)
+- pi ≥ 1.4.0, **macOS or Linux** (POSIX process groups, `timeout`,
+  process start times — Windows is not supported): Linux reads
+  `/proc/<pid>/stat`; macOS needs `ps -o lstart=`
 - GNU `timeout`: preinstalled on Linux; on macOS `brew install coreutils`
   or set `timeoutBin: "gtimeout"` ([Configuration](#configuration))
 

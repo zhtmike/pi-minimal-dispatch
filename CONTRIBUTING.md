@@ -13,8 +13,8 @@ for t in tests/*.test.ts; do node "$t"; done   # unit tests — no dependencies,
 pi -e ./src/index.ts                            # load the extension for one session
 ```
 
-The extension targets macOS and Linux — both GNU `timeout` and
-`ps -o lstart=` must be available.
+The extension targets macOS and Linux — GNU `timeout` must be available,
+plus `ps -o lstart=` on macOS (Linux reads `/proc/<pid>/stat` directly).
 
 ## CI & releasing
 

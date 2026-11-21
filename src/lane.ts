@@ -7,7 +7,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { DispatchConfig } from "./config.ts";
-import type { LaneRecord, WaitMode, WaveScan } from "./derive.ts";
+import { type LaneRecord, splitModelPin, type WaitMode, type WaveScan } from "./derive.ts";
 
 export const SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
@@ -216,6 +216,51 @@ export function laneEnv(): NodeJS.ProcessEnv {
 /** Lanes eligible for a kill signal: spawned, alive by the caller's check, not settled. */
 export function selectKillTargets(lanes: LaneRecord[], isAlive: (lane: LaneRecord) => boolean, isSettled: (lane: LaneRecord) => boolean, filter?: ReadonlySet<string>): LaneRecord[] {
 	return lanes.filter((lane) => lane.pid !== null && lane.spawned && isAlive(lane) && !isSettled(lane) && (filter === undefined || filter.has(lane.name)));
+}
+
+// --- default-model lane cap ------------------------------------------------
+
+/**
+ * Whether a model pin resolves to pi's configured default model — the tier
+ * `maxDefaultLanes` budgets. Omitted pins inherit it and always count; explicit
+ * pins compare (suffix stripped) against `provider/model`, bare ids against
+ * `defaultModel`. With either setting unset, explicit pins never count.
+ */
+export function isDefaultModelPin(pin: string | undefined, provider: string | undefined, model: string | undefined): boolean {
+	if (pin === undefined || pin === "") return true;
+	if (provider === undefined || provider === "" || model === undefined || model === "") return false;
+	const id = splitModelPin(pin).model;
+	return id.includes("/") ? id === `${provider}/${model}` : id === model;
+}
+
+export type CapLane = { wave: string; lane: { name: string; model?: string } };
+
+/**
+ * The dispatch-time refusal for `maxDefaultLanes`, before the manifest claim —
+ * nothing spawns, no slug is burned. The refusal names the lanes. `existing`
+ * is a thunk: called only when the new wave has default-tier lanes, so an
+ * all-pinned wave pays no workDir census.
+ */
+export function assertDefaultLaneCap(c: {
+	cap: number;
+	/** Census accessor — `liveUnsettledLanes(workDir)`, evaluated lazily. */
+	existing: () => CapLane[];
+	incoming: LaneParams[];
+	provider?: string;
+	model?: string;
+}): void {
+	const incomingDefault = c.incoming.filter((l) => isDefaultModelPin(l.model, c.provider, c.model));
+	if (incomingDefault.length === 0) return;
+	const existingDefault = c.existing().filter((e) => isDefaultModelPin(e.lane.model, c.provider, c.model));
+	if (existingDefault.length + incomingDefault.length <= c.cap) return;
+	const names = [
+		...existingDefault.map((e) => `${e.wave}/${e.lane.name}`),
+		...incomingDefault.map((l) => `${l.name} (this wave)`),
+	].join(", ");
+	throw new Error(
+		`default-model lane cap exceeded (maxDefaultLanes=${c.cap}): ${existingDefault.length} running + ${incomingDefault.length} in this wave = ${existingDefault.length + incomingDefault.length} — ${names}. ` +
+			"Pin a different model on the excess lanes (lanes[].model), or raise maxDefaultLanes in the config (~/.pi/agent/pi-minimal-dispatch.json or .pi/pi-minimal-dispatch.json)",
+	);
 }
 
 // --- lanes-tool parameter resolution ---------------------------------------

@@ -40,8 +40,9 @@ status polling. The hints chain the whole workflow through results, not
 schema prose: a `wait` that leaves every lane terminal appends the `collect`
 hint; a `collect` after which release is unblocked appends the `release`
 hint. The manifest also records the dispatcher's `owner` — `{ sid, pid,
-host, lstart }` — which the `kill` and `release` actions use as their
-ownership guard. Spawned lanes stream events immediately; a lane that failed to spawn appears as `SPAWN ERROR: …`.
+host, lstart }` (`lstart`: the process start token — `/proc/<pid>/stat` ticks
+on Linux, `ps -o lstart=` elsewhere) — which the `kill` and `release` actions
+use as their ownership guard. Spawned lanes stream events immediately; a lane that failed to spawn appears as `SPAWN ERROR: …`.
 
 **Errors** (the whole call fails, zero lanes spawned, no slug claimed):
 a brief file missing (all missing paths listed as resolved absolute paths —
@@ -53,7 +54,7 @@ or an empty list) · a lane leaving MCP enabled while its `tools` names neither
 `codemode` nor `tool_search` · a brief carrying a fenced `bash`/`sh`/`shell`/`zsh`
 block while its lane's `tools` grants no `bash` (grant `bash` or unfence — quoted
 output belongs in a `text` fence) · wave slug already exists · `timeoutBin`/`piBin`
-not found on `PATH`.
+not found on `PATH` · the default-model lane cap would be exceeded (`maxDefaultLanes`; lanes named).
 
 ### MCP and web reach
 
@@ -370,6 +371,7 @@ The lane protocol itself is fixed — every lane runs `--mode json --no-session
 | `pollMs` | number | `2000` | Poll interval for `wait`'s re-derive cadence and the statusbar (integer ≥ 100) — the knob for failure-detection latency in `wait` |
 | `piBin` | string | `"pi"` | Lane pi binary, resolved from `PATH` |
 | `timeoutBin` | string | `"timeout"` | Leash binary — set `"gtimeout"` if coreutils isn't linked on macOS |
+| `maxDefaultLanes` | number | unset | Refuse a dispatch when default-model lanes (pinned or inherited), running plus the new wave, would exceed N; the refusal names the lanes. Unset: no cap |
 
 ```json
 {
@@ -380,3 +382,15 @@ The lane protocol itself is fixed — every lane runs `--mode json --no-session
 
 Invalid files fail loudly at the next tool call: the error names the file and
 the valid keys/values. Unknown keys are rejected.
+
+### The default-model lane cap (`maxDefaultLanes`)
+
+A lane resolves to the default model when its `model` pin is omitted, or —
+with pi's `defaultProvider`/`defaultModel` both set — equals `provider/model`
+(`:level` suffix stripped; a bare id compares against `defaultModel` alone).
+With either setting unset, explicit pins never count. The census counts live
+lanes (pid alive by start token, transcript not settled) across every
+`*-manifest.json` in the target `workDir` — a dead dispatcher's lanes still
+count, a settled-but-unreleased wave does not, other workDirs are invisible.
+The check runs before the slug is claimed: nothing spawns, no manifest is
+left behind.
