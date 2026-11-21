@@ -37,9 +37,23 @@ jobs:
           fi
           awk -v ver="$VERSION" '$0 ~ "^## " ver " — " {p=1; next} /^## / {p=0} p' CHANGELOG.md > release-notes.md
           test -s release-notes.md
+      - name: Guard — the tag must point at main's head (PR → merge → tag ritual)
+        run: |
+          set -eu
+          tip="$(git ls-remote origin refs/heads/main | cut -f1)"
+          tagged="$(git rev-parse "$GITHUB_SHA^{commit}")"
+          if [ "$tagged" != "$tip" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} points at $tagged, not main's head $tip — merge the PR first, then tag the merge commit" >&2
+            exit 1
+          fi
       - run: npm test
-      - name: Publish to npm
-        run: npm publish --provenance
+      - name: Publish to npm (a re-tag of an already-published version is not a failure)
+        run: |
+          if ! npm publish --provenance; then
+            version="$(node -p "require('./package.json').version")"
+            [ "$(npm view "$(node -p "require('./package.json').name")" version)" = "$version" ] || exit 1
+            echo "::warning::npm publish failed; the registry already has $version — npm versions are immutable, the published tarball may not match this commit" >&2
+          fi
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
