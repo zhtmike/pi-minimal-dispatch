@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.6 — 2026-11-21
 
 The statusbar line self-labels inside brackets — `[lanes: …]` — matching
 pi-kit's `[pi-kit: …]`; pi renders every extension's status on one
