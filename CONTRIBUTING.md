@@ -28,13 +28,19 @@ The repo is dependency-free by design: no `node_modules`, no lockfile. CI
   unit test imports `index.ts`), and a `continue-on-error` canary typecheck
   against pi `latest`.
 - **Release** runs on pushing a `v*` tag. It refuses to publish unless the tag
-  matches `package.json`'s version and `CHANGELOG.md` has a `## <version> —`
-  section, then publishes to npm with provenance (OIDC trusted publishing — no
-  npm token is stored in the repo) and creates the GitHub release with that
-  CHANGELOG section as its body.
+  matches `package.json`'s version, `CHANGELOG.md` has a `## <version> —`
+  section, and the tagged commit is `main`'s head (the ritual below, enforced
+  — a tag off an unmerged branch refuses naming the fix), then publishes to
+  npm with provenance (OIDC trusted publishing — no npm token is stored in
+  the repo) and creates the GitHub release with that CHANGELOG section as its
+  body. A re-tag of a version npm already has is not a failure: the run warns
+  that the registry tarball may not match the tag's commit and proceeds to
+  the GitHub release (npm versions are immutable — re-publishing needs a
+  version bump).
 
 Releasing therefore is: bump `version` in `package.json`, add the CHANGELOG
-section, commit, then `git tag vX.Y.Z && git push origin vX.Y.Z`.
+section, commit, open the PR, **merge it to `main`**, then (lightweight tag)
+`git tag vX.Y.Z <merge-commit> && git push origin vX.Y.Z`.
 
 One-time setup (already done or needed once, not per release): on npmjs.com,
 add a trusted publisher for `@zhtmike/pi-minimal-dispatch` pointing at this repository
