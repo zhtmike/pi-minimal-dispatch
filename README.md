@@ -153,8 +153,8 @@ While any tracked lane runs — or has failed and the wave is not yet
 released — the footer shows one line:
 
 ```text
-lanes: 2 running · 1 failed (deadline) · 1 settled
-lanes [survey/docs]: running (turn 3 · bash · last 12s)   ← one lane running
+[lanes: 2 running · 1 failed (deadline) · 1 settled]
+[lanes: survey/docs running (turn 3 · bash · last 12s)]   ← one lane running
 ```
 
 A lane gone quiet badges `(1 idle 75s)`; a lane past its deadline badges

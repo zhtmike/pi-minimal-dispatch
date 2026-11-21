@@ -308,7 +308,7 @@ empty ones dropped: `[telemetry | running-count] · [idle/overdue badge] ·
 - An unreleased failure keeps the footer (and its poll tick) alive until
   the wave is released; a fully settled wave clears it.
 - When exactly one lane is running, the count becomes micro-telemetry:
-  `lanes [survey/docs]: running (turn 3 · bash · last 12s)` — the
+  `[lanes: survey/docs running (turn 3 · bash · last 12s)]` — the
   in-flight tool from the latest unmatched `tool_execution_start`; start
   events carry no timestamp, so no tool age is shown.
 
