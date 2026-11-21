@@ -140,7 +140,7 @@ export function formatStatusBarSummary(statuses: StatusBarEntry[]): string | und
 		const bits = [`turn ${lone.turns}`];
 		if (lone.inflightTool !== undefined) bits.push(lone.inflightTool);
 		if (lone.lastEventAgeSec !== null) bits.push(`last ${Math.round(lone.lastEventAgeSec)}s`);
-		parts.push(`lanes [${lone.wave}/${lone.name}]: running (${bits.join(" · ")})`);
+		parts.push(`${lone.wave}/${lone.name} running (${bits.join(" · ")})`);
 	} else if (inflight.length > 0) {
 		parts.push(`${inflight.length} running`);
 	}
@@ -157,7 +157,7 @@ export function formatStatusBarSummary(statuses: StatusBarEntry[]): string | und
 	if (failed.length > 0) parts.push(`${failed.length} failed${failed[0].cause !== undefined ? ` (${failed[0].cause})` : ""}`);
 	if (settled.length > 0) parts.push(`${settled.length} settled`);
 
-	return `${lone !== undefined ? "" : "lanes: "}${parts.join(" · ")}`;
+	return `[lanes: ${parts.join(" · ")}]`;
 }
 
 // --- TUI path display -------------------------------------------------------

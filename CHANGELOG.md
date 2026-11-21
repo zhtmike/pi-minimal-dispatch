@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.6 — 2026-11-21
+
+The statusbar line self-labels inside brackets — `[lanes: …]` — matching
+pi-kit's `[pi-kit: …]`; pi renders every extension's status on one
+space-joined line with keys hidden, so each package's segment now brackets
+itself and reads apart from its neighbors.
+
 ## 0.5.5 — 2026-11-21
 
 Lane-liveness start token fix, plus a configurable default-model lane cap.

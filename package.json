@@ -1,6 +1,6 @@
 {
 	"name": "@zhtmike/pi-minimal-dispatch",
-	"version": "0.5.5",
+	"version": "0.5.6",
 	"description": "Minimal detached lane dispatch with visible state for the pi coding agent",
 	"author": "Mike Cheung",
 	"keywords": [
