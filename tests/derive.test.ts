@@ -7,7 +7,7 @@ import { spawn, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { type LaneRecord, type Manifest, deriveLane, deriveLanes, deriveTrace, finalAssistantText, groupAlive, laneEvents, pidAlive, psLstart, psLstartBatch, readManifest, scanWaves, waveSlugsIn, waveTerminal, waitForTerminal, writeManifestAtomic } from "../src/derive.ts";
+import { type LaneRecord, type Manifest, deriveLane, deriveLanes, deriveTrace, finalAssistantText, groupAlive, laneEvents, liveUnsettledLanes, pidAlive, processStartId, readManifest, scanWaves, startIdBatch, startTokenFromStatLine, waveSlugsIn, waveTerminal, waitForTerminal, writeManifestAtomic } from "../src/derive.ts";
 import { parseEvents, parseEventsTail } from "../src/events.ts";
 
 let failures = 0;
@@ -74,7 +74,7 @@ check("parseEvents throws on mid-file corruption", threw);
 // --- deriveLane ------------------------------------------------------------
 
 writeEvents([session, turn, assistantEnd({ input: 10, output: 2, cost: { total: 0.001 } }, "toolUse"), assistantEnd({ input: 5, output: 1, cost: { total: 0.002 } }, "stop"), '{"type":"agent_settled","aborted":false}']);
-let s = deriveLane(lane({ pid: process.pid, processStart: psLstart(process.pid) }), Date.now());
+let s = deriveLane(lane({ pid: process.pid, processStart: processStartId(process.pid) }), Date.now());
 check(
 	"settled: state + usage summed over assistant message_end + last stopReason",
 	s.state === "settled" && s.usage.input === 15 && s.usage.output === 3 && s.usage.cost === 0.003 && s.stopReason === "stop",
@@ -83,23 +83,23 @@ check(
 check("settled: turns counted", s.turns === 1);
 
 writeEvents([session, turn, assistantEnd({ input: 7 }, "toolUse")]);
-s = deriveLane(lane({ pid: process.pid, processStart: psLstart(process.pid) }), Date.now());
+s = deriveLane(lane({ pid: process.pid, processStart: processStartId(process.pid) }), Date.now());
 check("running: alive + session header, no agent_settled", s.state === "running" && !s.overdue);
 
 writeEvents([]);
 fs.rmSync(eventsPath);
-s = deriveLane(lane({ pid: process.pid, processStart: psLstart(process.pid) }), Date.now());
+s = deriveLane(lane({ pid: process.pid, processStart: processStartId(process.pid) }), Date.now());
 check("starting: alive, no events file yet", s.state === "starting");
 
 writeEvents([session, turn, assistantEnd({ input: 7 }, "toolUse")]);
-s = deriveLane(lane({ pid: process.pid, processStart: psLstart(process.pid), startedAt: new Date(Date.now() - 20000).toISOString(), deadlineSec: 5 }), Date.now());
+s = deriveLane(lane({ pid: process.pid, processStart: processStartId(process.pid), startedAt: new Date(Date.now() - 20000).toISOString(), deadlineSec: 5 }), Date.now());
 check("running + overdue: alive past deadline keeps running with overdue flag", s.state === "running" && s.overdue === true, JSON.stringify(s));
 
 // --- inflightTool ------------------------------------------------------------
 
 const toolStart = (id: string, name: string) => JSON.stringify({ type: "tool_execution_start", toolCallId: id, toolName: name, args: {} });
 const toolEnd = (id: string) => JSON.stringify({ type: "tool_execution_end", toolCallId: id, toolName: "x", result: {}, isError: false });
-const alive = () => lane({ pid: process.pid, processStart: psLstart(process.pid) });
+const alive = () => lane({ pid: process.pid, processStart: processStartId(process.pid) });
 
 writeEvents([session, turn, assistantEnd({ input: 7 }, "toolUse"), toolStart("c1", "bash")]);
 s = deriveLane(alive(), Date.now());
@@ -177,7 +177,7 @@ check(
 
 // message_start: early model identity before the first message_end
 writeEvents([session, turn, assistantStart({ model: "zai/glm-5.3" }), '{"type":"message_update","message":{"role":"assistant"}}']);
-s = deriveLane(lane({ pid: process.pid, processStart: psLstart(process.pid) }), Date.now());
+s = deriveLane(lane({ pid: process.pid, processStart: processStartId(process.pid) }), Date.now());
 check(
 	"message_start supplies the answering model before any message_end (no-pin lane)",
 	s.model === "zai/glm-5.3" && s.usage.input === 0,
@@ -189,7 +189,7 @@ writeEvents([session, turn,
 	assistantEnd({ input: 1 }, "toolUse", { model: "zai/glm-4.6", thinkingLevel: "high" }),
 	assistantStart({ model: "zai/glm-5.3-flash" }),
 ]);
-s = deriveLane(lane({ pid: process.pid, processStart: psLstart(process.pid) }), Date.now());
+s = deriveLane(lane({ pid: process.pid, processStart: processStartId(process.pid) }), Date.now());
 check(
 	"message_start after a model switch updates the model; the stale level waits for message_end (additive)",
 	s.model === "zai/glm-5.3-flash" && s.thinkingLevel === "high",
@@ -197,7 +197,7 @@ check(
 );
 
 writeEvents([session, turn, assistantStart({ model: "zai/glm-5.3-flash" })]);
-s = deriveLane(lane({ pid: process.pid, processStart: psLstart(process.pid), model: "zai/glm-5.3-flash:low" }), Date.now());
+s = deriveLane(lane({ pid: process.pid, processStart: processStartId(process.pid), model: "zai/glm-5.3-flash:low" }), Date.now());
 check(
 	"message_start additive: a matching model keeps the pinned level until message_end",
 	s.model === "zai/glm-5.3-flash" && s.thinkingLevel === "low",
@@ -205,7 +205,7 @@ check(
 );
 
 writeEvents([session, turn, assistantStart({ model: "glm-5.3-flash" })]);
-s = deriveLane(lane({ pid: process.pid, processStart: psLstart(process.pid), model: "zai/glm-5.3-flash:low" }), Date.now());
+s = deriveLane(lane({ pid: process.pid, processStart: processStartId(process.pid), model: "zai/glm-5.3-flash:low" }), Date.now());
 check(
 	"message_start additive across forms: bare stream id over a provider-qualified pin keeps the pinned level",
 	s.model === "glm-5.3-flash" && s.thinkingLevel === "low",
@@ -222,7 +222,7 @@ check(
 
 // --- pidAlive reuse guard --------------------------------------------------
 
-check("pidAlive: own pid + matching start = alive", pidAlive(process.pid, psLstart(process.pid)));
+check("pidAlive: own pid + matching start = alive", pidAlive(process.pid, processStartId(process.pid)));
 check("pidAlive: alive pid with wrong start-time = dead (reused PID)", !pidAlive(process.pid, "bogus start"));
 check("pidAlive: dead pid = dead", !pidAlive(deadPid, null));
 
@@ -247,7 +247,7 @@ const wLane: LaneRecord = {
 	eventsPath: wEvents,
 	errPath: wErr,
 	pid: child.pid!,
-	processStart: psLstart(child.pid!),
+	processStart: processStartId(child.pid!),
 	startedAt: new Date().toISOString(),
 	deadlineSec: 900,
 	spawned: true,
@@ -348,7 +348,7 @@ const mkAnyLane = (name: string, pid: number): LaneRecord => ({
 	eventsPath: path.join(workDir3, `any-${name}.events.jsonl`),
 	errPath: path.join(workDir3, `any-${name}.err`),
 	pid,
-	processStart: psLstart(pid),
+	processStart: processStartId(pid),
 	startedAt: new Date().toISOString(),
 	deadlineSec: 900,
 	spawned: true,
@@ -511,7 +511,7 @@ fs.rmSync(workDir3, { recursive: true, force: true });
 	fs.writeFileSync(path.join(dirB, "beta-manifest.json"), "{corrupt");
 	writeManifestAtomic({
 		version: 1, wave: "gamma", workDir: dirB, createdAt: new Date().toISOString(),
-		owner: { sid: "self", pid: process.pid, host: os.hostname(), lstart: psLstart(process.pid) },
+		owner: { sid: "self", pid: process.pid, host: os.hostname(), lstart: processStartId(process.pid) },
 		lanes: [],
 	});
 
@@ -619,17 +619,55 @@ fs.rmSync(workDir3, { recursive: true, force: true });
 }
 
 {
-	const probe = psLstartBatch([process.pid, deadPid]);
+	const probe = startIdBatch([process.pid, deadPid]);
 	check(
-		"psLstartBatch: live pid listed with its lstart, dead pid absent",
-		probe.get(process.pid) === psLstart(process.pid) && !probe.has(deadPid),
+		"startIdBatch: live pid listed with its start token, dead pid absent",
+		probe.get(process.pid) === processStartId(process.pid) && !probe.has(deadPid),
 		JSON.stringify([...probe.keys()]),
 	);
 	check(
-		"psLstartBatch: a mixed live + out-of-range batch still lists the live pid",
-		psLstartBatch([process.pid, 1e9]).get(process.pid) === psLstart(process.pid),
-		"the out-of-range pid would kill the whole batch without the MAX_PID filter",
+		"startIdBatch: a mixed live + out-of-range batch still lists the live pid",
+		startIdBatch([process.pid, 1e9]).get(process.pid) === processStartId(process.pid),
+		"the out-of-range pid would kill the whole ps batch without the MAX_PID filter",
 	);
+}
+
+// --- process start token: uptime-based identity, not a rendered date --------
+
+{
+	check(
+		"startTokenFromStatLine: field 22 extracted after a spaced comm",
+		startTokenFromStatLine("12345 (a b c) S 1 0 0 0 -1 4194560 100 0 0 3 5 6 7 8 9 10 11 12 99999 20 0") === "99999",
+	);
+	check(
+		"startTokenFromStatLine: malformed lines yield empty, never throw",
+		startTokenFromStatLine("(no close") === "" && startTokenFromStatLine("1 (x) S") === "" && startTokenFromStatLine("") === "",
+	);
+	if (process.platform === "linux") {
+		// The real /proc line of this process: its own comm may carry spaces — the
+		// parser must survive the live format, not just crafted ones.
+		const real = fs.readFileSync(`/proc/${process.pid}/stat`, "utf8");
+		check(
+			"processStartId: /proc read is digits and matches the parsed line",
+			/^\d+$/.test(processStartId(process.pid)) && processStartId(process.pid) === startTokenFromStatLine(real),
+		);
+	}
+	check(
+		"processStartId: two probes of a running pid agree (wall-clock steps cannot shift it)",
+		(() => {
+			const a = processStartId(process.pid);
+			const b = processStartId(process.pid);
+			return a !== "" && a === b;
+		})(),
+	);
+	if (process.platform === "linux") {
+		// Old manifests recorded a `ps lstart` date string; after the token change
+		// such a record reads dead (same-kind comparison), never crashes.
+		const oldEv = path.join(tmp, "old-kind.events.jsonl");
+		fs.writeFileSync(oldEv, `${session}\n${turn}\n`);
+		const s = deriveLane(lane({ eventsPath: oldEv, pid: process.pid, processStart: "Sat Nov 21 09:53:21 2026" }), Date.now());
+		check("old-kind manifest start token reads dead, not crash", s.state === "failed" && s.cause === "crashed");
+	}
 }
 
 {
@@ -681,7 +719,7 @@ fs.rmSync(workDir3, { recursive: true, force: true });
 	fs.writeFileSync(settledPath, `${session}\n{"type":"agent_settled","aborted":false}\n`);
 	const sweepLanes = [
 		lane({ name: "dead", eventsPath: path.join(tmp, "sweep-dead.events.jsonl"), pid: deadPid }),
-		lane({ name: "alive-settled", eventsPath: settledPath, pid: process.pid, processStart: psLstart(process.pid) }),
+		lane({ name: "alive-settled", eventsPath: settledPath, pid: process.pid, processStart: processStartId(process.pid) }),
 		lane({ name: "unspawned", spawned: false, spawnError: "x" }),
 	];
 	const sweep = deriveLanes(sweepLanes, Date.now());
@@ -697,7 +735,7 @@ fs.rmSync(workDir3, { recursive: true, force: true });
 	// A tombstone is authoritative in sweeps even while a group member lingers.
 	const tombEvents = path.join(tmp, "tomb.events.jsonl");
 	fs.writeFileSync(tombEvents, `${session}\n`);
-	const tomb = lane({ name: "tomb", eventsPath: tombEvents, pid: process.pid, processStart: psLstart(process.pid), killedAt: new Date().toISOString() });
+	const tomb = lane({ name: "tomb", eventsPath: tombEvents, pid: process.pid, processStart: processStartId(process.pid), killedAt: new Date().toISOString() });
 	const sweepTomb = deriveLanes([tomb], Date.now());
 	check(
 		"deriveLanes: a tombstoned lane derives killed, not running",
@@ -732,6 +770,53 @@ fs.rmSync(workDir3, { recursive: true, force: true });
 	fs.writeFileSync(ef, `${efLine}\n`.repeat(8)); // same inode, larger, different stream
 	const st3 = laneEvents(ef);
 	check("laneEvents: an empty-first-observation entry still resets on replacement", st3.events.length === 8 && st3.fold.turns === 8, `${st3.events.length} events`);
+}
+
+// --- liveUnsettledLanes: the default-model cap's census ----------------------
+
+{
+	const dir = path.join(tmp, "cap");
+	fs.mkdirSync(dir, { recursive: true });
+	const ev = (name: string, lines: string[]) => {
+		const p = path.join(dir, `${name}.events.jsonl`);
+		fs.writeFileSync(p, lines.join("\n") + "\n");
+		return p;
+	};
+	const laneOf = (name: string, eventsPath: string, pid: number, model?: string): LaneRecord => ({
+		name, briefPath: "/dev/null", eventsPath, errPath: path.join(dir, `${name}.err`),
+		pid, processStart: processStartId(pid), startedAt: new Date().toISOString(), deadlineSec: 900,
+		...(model !== undefined ? { model } : {}), spawned: true,
+	});
+
+	const settledEvent = '{"type":"agent_settled","aborted":false}';
+
+	// A live detached child stands in for a dead dispatcher's still-running lane.
+	const liveChild = spawn("sleep", ["30"], { detached: true, stdio: "ignore" });
+	liveChild.unref();
+	await new Promise((r) => setTimeout(r, 200));
+
+	writeManifestAtomic({
+		version: 1, wave: "orphan", workDir: dir, createdAt: new Date().toISOString(),
+		// No owner record: a dead dispatcher's wave — its live lane still counts.
+		lanes: [laneOf("still-running", ev("orphan-still-running", [session, turn]), liveChild.pid!)],
+	});
+	writeManifestAtomic({
+		version: 1, wave: "done", workDir: dir, createdAt: new Date().toISOString(),
+		lanes: [laneOf("settled-unreleased", ev("done-settled", [session, settledEvent]), process.pid)],
+	});
+	writeManifestAtomic({
+		version: 1, wave: "gone", workDir: dir, createdAt: new Date().toISOString(),
+		lanes: [laneOf("dead-pid", ev("gone-dead", [session, turn]), deadPid)],
+	});
+	fs.writeFileSync(path.join(dir, "corrupt-manifest.json"), "{corrupt");
+
+	const census = liveUnsettledLanes(dir);
+	check(
+		"liveUnsettledLanes: live unsettled counts (dead dispatcher), settled/dead skipped, corrupt manifest ignored",
+		census.length === 1 && census[0].wave === "orphan" && census[0].lane.name === "still-running",
+		JSON.stringify(census.map((c) => `${c.wave}/${c.lane.name}`)),
+	);
+	try { process.kill(-liveChild.pid!, "SIGKILL"); } catch {}
 }
 
 fs.rmSync(tmp, { recursive: true, force: true });

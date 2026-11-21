@@ -16,7 +16,7 @@ export type LaneRecord = {
 	eventsPath: string;
 	errPath: string;
 	pid: number | null;
-	processStart: string | null; // `ps -o lstart=` captured at spawn
+	processStart: string | null; // start token captured at spawn — /proc ticks (Linux) or `ps -o lstart=`
 	startedAt: string; // ISO, stamped at creation
 	deadlineSec: number;
 	model?: string;
@@ -38,7 +38,7 @@ export type Manifest = {
 	lanes: LaneRecord[];
 };
 
-/** Dispatcher identity recorded at dispatch; `lstart` is `ps -o lstart=` captured then. */
+/** Dispatcher identity recorded at dispatch; `lstart` is the process start token captured then (see `processStartId`). */
 export type WaveOwner = {
 	sid: string;
 	pid: number;
@@ -106,8 +106,32 @@ export function writeManifestAtomic(m: Manifest): void {
 
 // --- process liveness ------------------------------------------------------
 
-/** Process start-time per `ps -o lstart=`; empty string means the pid is dead. */
-export function psLstart(pid: number): string {
+/**
+ * Parse a `/proc/<pid>/stat` line into its start token: field 22, clock ticks
+ * since boot — uptime-based, immune to wall-clock steps. comm may contain
+ * spaces and parens — fields are counted after the LAST `)`.
+ */
+export function startTokenFromStatLine(line: string): string {
+	const close = line.lastIndexOf(")");
+	if (close === -1) return "";
+	const rest = line.slice(close + 1).trim().split(/\s+/);
+	const ticks = rest[19]; // field 22 (starttime)
+	return /^\d+$/.test(ticks ?? "") ? ticks : "";
+}
+
+/**
+ * Process start token — a pid's identity for the reuse guard. On Linux,
+ * `/proc/<pid>/stat` field 22; elsewhere `ps -o lstart=`. Empty string means
+ * dead/unreadable — the same verdict a failed `ps` gives, never an exception.
+ */
+export function processStartId(pid: number): string {
+	if (process.platform === "linux") {
+		try {
+			return startTokenFromStatLine(fs.readFileSync(`/proc/${pid}/stat`, "utf8"));
+		} catch {
+			return "";
+		}
+	}
 	try {
 		return execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8" }).trim();
 	} catch {
@@ -126,29 +150,38 @@ export function pidAlive(pid: number, expectedStart: string | null): boolean {
 		// EPERM: exists but not signalable — fall through to the start-time check
 	}
 	if (expectedStart === null) return reachable;
-	const actual = psLstart(pid);
+	const actual = processStartId(pid);
 	return actual !== "" && actual === expectedStart;
 }
 
 // An out-of-range pid (a foreign-host manifest on a shared workDir) makes BSD ps reject
-// the whole batch — drop it instead; it is not a process on this host.
+// the whole ps batch — drop it instead; it is not a process on this host.
 const MAX_PID = process.platform === "darwin" ? 99998 : 4194304;
 
 /**
- * One `ps` listing for many pids: pid → lstart, absent = not running here. A
- * failed listing means no listed pid exists — the same verdict `psLstart`
- * gives a dead pid, never an exception.
+ * One liveness listing for many pids: pid → start token, absent = not running
+ * here. On Linux a loop of `/proc` reads — no subprocess; elsewhere one `ps`
+ * listing. A failed listing means no listed pid exists — the same verdict
+ * `processStartId` gives a dead pid, never an exception.
  */
-export function psLstartBatch(pids: number[]): Map<number, string> {
-	const live = [...new Set(pids)].filter((p) => Number.isInteger(p) && p > 0 && p <= MAX_PID);
-	if (live.length === 0) return new Map();
+export function startIdBatch(pids: number[]): Map<number, string> {
+	const unique = [...new Set(pids)].filter((p) => Number.isInteger(p) && p > 0);
+	const map = new Map<number, string>();
+	if (process.platform === "linux") {
+		for (const p of unique) {
+			const token = processStartId(p);
+			if (token !== "") map.set(p, token);
+		}
+		return map;
+	}
+	const live = unique.filter((p) => p <= MAX_PID);
+	if (live.length === 0) return map;
 	let out: string;
 	try {
 		out = execFileSync("ps", ["-o", "pid=,lstart=", "-p", live.join(",")], { encoding: "utf8" });
 	} catch {
-		return new Map();
+		return map;
 	}
-	const map = new Map<number, string>();
 	for (const line of out.split("\n")) {
 		const m = line.trim().match(/^(\d+)\s+(.+)$/);
 		if (m !== null) map.set(Number(m[1]), m[2].trim());
@@ -180,11 +213,11 @@ export function groupAlive(pgid: number): boolean {
 
 export type OwnerStatus = "own" | "live-foreign" | "foreign-host" | "dead" | "unknown";
 
-/** Owner record for the current dispatcher; throws when ps cannot capture the start-time. */
+/** Owner record for the current dispatcher; throws when the start token cannot be captured. */
 export function currentOwner(sid: string): WaveOwner {
-	const lstart = psLstart(process.pid);
+	const lstart = processStartId(process.pid);
 	if (lstart === "") {
-		throw new Error("could not capture the dispatcher's process start-time (ps failed) — ownership guards would be blind");
+		throw new Error("could not capture the dispatcher's process start token (/proc or ps failed) — ownership guards would be blind");
 	}
 	return { sid, pid: process.pid, host: hostname(), lstart };
 }
@@ -470,16 +503,24 @@ export function laneEvents(eventsPath: string): LaneEvents {
 
 // --- lane status ------------------------------------------------------------
 
+// --- model pin identity ----------------------------------------------------
+
+/** Split a model pin's `:level` suffix — last colon plus a valid level word; ids like `qwen3-coder:exacto` keep theirs. */
+export function splitModelPin(pin: string): { model: string; thinking?: string } {
+	const m = pin.match(/^(.+):(off|minimal|low|medium|high|xhigh|max)$/);
+	return m === null ? { model: pin } : { model: m[1], thinking: m[2] };
+}
+
 /** Manifest-fact base for a lane no transcript could be derived for. */
 function bareStatus(lane: LaneRecord): LaneStatus {
-	const pinned = lane.model?.match(/^(.+):(off|minimal|low|medium|high|xhigh|max)$/);
+	const pinned = lane.model !== undefined ? splitModelPin(lane.model) : undefined;
 	return {
 		name: lane.name,
 		state: "failed",
 		turns: 0,
 		usage: emptyUsage(),
-		model: pinned?.[1] ?? lane.model,
-		thinkingLevel: lane.thinking ?? pinned?.[2],
+		model: pinned?.model ?? lane.model,
+		thinkingLevel: lane.thinking ?? pinned?.thinking,
 		lastEventAgeSec: null,
 	};
 }
@@ -499,14 +540,14 @@ function statMtimeMs(p: string): number | null {
  * word (ids like `qwen3-coder:exacto` keep it).
  */
 function laneStatus(lane: LaneRecord, now: number, fold: LaneFold, mtimeMs: number | null, alive: boolean): LaneStatus {
-	const pinned = lane.model?.match(/^(.+):(off|minimal|low|medium|high|xhigh|max)$/);
+	const pinned = lane.model !== undefined ? splitModelPin(lane.model) : undefined;
 	const base: LaneStatus = {
 		name: lane.name,
 		state: "failed",
 		turns: fold.turns,
 		usage: fold.usage,
-		model: fold.lastModel ?? pinned?.[1] ?? lane.model,
-		thinkingLevel: fold.lastEndModel !== undefined ? fold.lastEndThinking : lane.thinking ?? pinned?.[2],
+		model: fold.lastModel ?? pinned?.model ?? lane.model,
+		thinkingLevel: fold.lastEndModel !== undefined ? fold.lastEndThinking : lane.thinking ?? pinned?.thinking,
 		lastEventAgeSec: mtimeMs === null ? null : Math.round((now - mtimeMs) / 100) / 10,
 	};
 	if (fold.stopReason !== undefined) base.stopReason = fold.stopReason;
@@ -558,7 +599,7 @@ export function deriveLanes(lanes: LaneRecord[], now: number): LaneStatus[] {
 			return undefined; // fail-soft per lane in the derive below
 		}
 	});
-	const probe = psLstartBatch(
+	const probe = startIdBatch(
 		lanes
 			.filter((l, i) => l.spawned && l.pid !== null && l.killedAt === undefined && states[i] !== undefined && !states[i]!.fold.settled)
 			.map((l) => l.pid!),
@@ -746,6 +787,39 @@ export function scanWaves(workDirs: string[], selfSid: string, currentHost: stri
 		}
 	}
 	return out.sort((a, b) => a.wave.localeCompare(b.wave));
+}
+
+/**
+ * Live, not-yet-settled lanes across every wave manifest in `workDir` — the
+ * default-model cap's census. A dead dispatcher's detached lanes count; a
+ * settled-but-unreleased wave does not; an unreadable manifest contributes
+ * nothing. A corrupt transcript reads unsettled — that lane is still consuming.
+ */
+export function liveUnsettledLanes(workDir: string): Array<{ wave: string; lane: LaneRecord }> {
+	const candidates: Array<{ wave: string; lane: LaneRecord }> = [];
+	for (const wave of waveSlugsIn(workDir)) {
+		let m: Manifest;
+		try {
+			m = readManifest(workDir, wave);
+		} catch {
+			continue; // unreadable manifest: no lanes to count
+		}
+		for (const lane of m.lanes) {
+			if (lane.spawned && lane.pid !== null) candidates.push({ wave, lane });
+		}
+	}
+	const probe = startIdBatch(candidates.map((c) => c.lane.pid!));
+	const out: Array<{ wave: string; lane: LaneRecord }> = [];
+	for (const c of candidates) {
+		if (!probeAlive(probe, c.lane.pid!, c.lane.processStart)) continue; // dead or reused pid
+		try {
+			if (laneEvents(c.lane.eventsPath).fold.settled) continue;
+		} catch {
+			// corrupt transcript reads unsettled — the lane is still consuming
+		}
+		out.push(c);
+	}
+	return out;
 }
 
 export { parseEvents };

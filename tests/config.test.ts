@@ -60,6 +60,38 @@ check("invalid JSON errors with the path", throwsWith(() => loadConfig(project),
 fs.writeFileSync(path.join(agentDir, "pi-minimal-dispatch.json"), "");
 check("empty file is fine", loadConfig(project).deadlineSec === 60);
 
+// --- maxDefaultLanes: absent = no cap; both layers, later wins ----------------
+
+fs.writeFileSync(path.join(agentDir, "pi-minimal-dispatch.json"), JSON.stringify({ deadlineSec: 600 }));
+check(
+	"maxDefaultLanes absent in both files loads as undefined (no cap)",
+	loadConfig(project).maxDefaultLanes === undefined,
+);
+fs.writeFileSync(path.join(agentDir, "pi-minimal-dispatch.json"), JSON.stringify({ maxDefaultLanes: 3 }));
+check("maxDefaultLanes set in the agent file loads", loadConfig(project).maxDefaultLanes === 3);
+fs.writeFileSync(path.join(agentDir, "pi-minimal-dispatch.json"), JSON.stringify({ maxDefaultLanes: 0 }));
+check(
+	"maxDefaultLanes below the minimum (0) errors naming the key",
+	throwsWith(() => loadConfig(project), "maxDefaultLanes"),
+);
+fs.writeFileSync(path.join(agentDir, "pi-minimal-dispatch.json"), JSON.stringify({ maxDefaultLanes: null }));
+check(
+	"maxDefaultLanes null errors (non-number branch)",
+	throwsWith(() => loadConfig(project), "maxDefaultLanes"),
+);
+fs.writeFileSync(path.join(agentDir, "pi-minimal-dispatch.json"), JSON.stringify({ maxDefaultLanes: 3 }));
+fs.writeFileSync(path.join(project, ".pi/pi-minimal-dispatch.json"), JSON.stringify({ maxDefaultLanes: 5 }));
+check("maxDefaultLanes in the project file overrides the agent file", loadConfig(project).maxDefaultLanes === 5);
+fs.writeFileSync(path.join(project, ".pi/pi-minimal-dispatch.json"), JSON.stringify({ maxDefaultLanes: 1 }));
+check("maxDefaultLanes in the project file may also tighten", loadConfig(project).maxDefaultLanes === 1);
+fs.writeFileSync(path.join(project, ".pi/pi-minimal-dispatch.json"), JSON.stringify({ maxDefaultLanes: 0 }));
+check(
+	"maxDefaultLanes below the minimum in the project file errors naming the key",
+	throwsWith(() => loadConfig(project), "maxDefaultLanes"),
+);
+fs.writeFileSync(path.join(project, ".pi/pi-minimal-dispatch.json"), JSON.stringify({ deadlineSec: 60 }));
+check("agent value stands when the project file omits the key", loadConfig(project).maxDefaultLanes === 3);
+
 if (prevAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
 fs.rmSync(tmp, { recursive: true, force: true });

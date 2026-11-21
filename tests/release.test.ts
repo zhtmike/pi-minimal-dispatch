@@ -14,7 +14,7 @@ import {
 	type WaveOwner,
 	ownerGuard,
 	ownerStatus,
-	psLstart,
+	processStartId,
 	releasePaths,
 	releaseWave,
 	unconsumedTranscripts,
@@ -33,7 +33,7 @@ function check(name: string, cond: boolean, detail?: string) {
 
 const tmp = fs.mkdtempSync(path.join("/tmp", "pmd-release-test-"));
 const host = hostname();
-const selfLstart = psLstart(process.pid);
+const selfLstart = processStartId(process.pid);
 
 function owner(over: Partial<WaveOwner>): WaveOwner {
 	return { sid: "self", pid: process.pid, host, lstart: selfLstart, ...over };

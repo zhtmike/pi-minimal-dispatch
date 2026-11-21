@@ -25,11 +25,12 @@ import {
 	deriveTrace,
 	groupAlive,
 	laneEvents,
+	liveUnsettledLanes,
 	manifestPathFor,
 	ownerGuard,
 	parseEvents,
 	pidAlive,
-	psLstart,
+	processStartId,
 	readManifest,
 	releaseUnblocked,
 	releaseWave,
@@ -67,6 +68,7 @@ import {
 	type LaneParams,
 	assertActionParams,
 	assertBriefTools,
+	assertDefaultLaneCap,
 	assertLaneTools,
 	assertSlugs,
 	buildLaneArgs,
@@ -90,6 +92,9 @@ import {
 function stringEnum<T extends readonly string[]>(values: T, options?: { description?: string }) {
 	return Type.Unsafe<T[number]>({ type: "string", enum: [...values], ...(options?.description ? { description: options.description } : {}) });
 }
+
+/** Stashed at factory time, read at tool-execute time — `pi.getSettings()` throws during factory execution. */
+let readSettings!: () => { defaultProvider?: string; defaultModel?: string };
 
 /** Spawn one lane detached; a failure at any step becomes the record's spawnError, never a throw. */
 function spawnLane(workDir: string, wave: string, lane: LaneParams, cfg: DispatchConfig, timeoutBin: string): LaneRecord {
@@ -131,14 +136,14 @@ function spawnLane(workDir: string, wave: string, lane: LaneParams, cfg: Dispatc
 			} catch {}
 		});
 		record.pid = child.pid ?? null;
-		const start = psLstart(child.pid!);
+		const start = processStartId(child.pid!);
 		if (start === "") {
-			// Without a start-time the liveness guard can never match — stop the lane
+			// Without a start token the liveness guard can never match — stop the lane
 			// now rather than record an unmatchable identity.
 			try {
 				process.kill(-child.pid!, "SIGTERM");
 			} catch {}
-			record.spawnError = "could not capture process start-time (ps failed); lane terminated";
+			record.spawnError = "could not capture process start token (/proc or ps failed); lane terminated";
 		} else {
 			record.processStart = start;
 			record.spawned = true;
@@ -200,6 +205,18 @@ const dispatchTool = defineTool({
 		assertLaneTools(params.lanes);
 		// A brief that demands a shell the lane lacks fails here, not mid-run after spawn.
 		assertBriefTools(params.lanes);
+
+		// Default-model lane cap — before the manifest claim.
+		if (cfg.maxDefaultLanes !== undefined) {
+			const settings = readSettings();
+			assertDefaultLaneCap({
+				cap: cfg.maxDefaultLanes,
+				existing: () => liveUnsettledLanes(workDir),
+				incoming: params.lanes,
+				provider: settings.defaultProvider,
+				model: settings.defaultModel,
+			});
+		}
 
 		// Claim the wave slug atomically; an existing manifest rejects it.
 		const manifestPath = manifestPathFor(workDir, params.wave);
@@ -550,6 +567,8 @@ export default function (pi: ExtensionAPI) {
 	// A dispatched lane never gets the dispatch tool again — the child marker
 	// keeps this extension out of the lane while the rest of the user's setup loads.
 	if (process.env.PI_MINIMAL_DISPATCH_CHILD === "1") return;
+
+	readSettings = () => pi.getSettings();
 
 	pi.registerTool(dispatchTool);
 	pi.registerTool(lanesTool);
