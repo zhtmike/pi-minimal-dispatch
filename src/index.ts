@@ -165,7 +165,7 @@ const dispatchTool = defineTool({
 	description:
 		"Spawn detached sub-agent lanes (fresh pi processes) for a wave and return immediately; " +
 		"lanes survive this session's exit, and every lane in the call is spawned — no queueing. " +
-		"A lane's brief is its entire prompt — inline (`brief`) or a file (`briefPath`); write briefs first; " +
+		"A lane's brief is its entire prompt — inline (`brief`) or a file (`briefPath`); write briefs first; state in the brief that the lane's final message is its deliverable; " +
 		"a lane sees nothing else: no skills, no session context, read-only tools unless granted more, never the dispatch tool. " +
 		"The workDir is shared across sessions — park briefs under a subdirectory unique to this session. " +
 		"Then wait, collect artifacts when settled, release the wave when done.",
@@ -176,10 +176,10 @@ const dispatchTool = defineTool({
 				name: Type.String({ description: "Lane slug" }),
 				brief: Type.Optional(Type.String({ description: "Inline alternative to briefPath — the lane's entire prompt; exactly one of brief or briefPath; written to <workDir>/<wave>-<name>-brief.md" })),
 				briefPath: Type.Optional(Type.String({ description: "Path to the lane's brief file (@file prompt); exactly one of briefPath or brief" })),
-				model: Type.Optional(Type.String({ description: "Pin a model id, pi's id:thinking suffix allowed; omitted: pi's configured default — not necessarily this session's active model" })),
+				model: Type.Optional(Type.String({ description: "Pin a model id, pi's id:thinking suffix allowed; omitted: pi's configured default — not necessarily this session's active model; valid ids: `pi --list-models`" })),
 				thinking: Type.Optional(stringEnum(["off", "minimal", "low", "medium", "high", "xhigh", "max"], { description: "Pin a thinking level; wins over model's :level suffix — status reports the actual level" })),
 				deadlineSec: Type.Optional(Type.Number({ description: "Deadline leash in seconds (config default: 900)", minimum: 1 })),
-				tools: Type.Optional(Type.String({ description: "Tool allowlist, comma-separated; default 'read,grep,find,ls' (read-only — grant 'bash' only with cause; e.g. 'read,grep,find,ls,bash,edit,write' for a write-capable lane)" })),
+				tools: Type.Optional(Type.String({ description: "Tool allowlist, comma-separated; default 'read,grep,find,ls' (read-only). Role shapes: research+web 'read,grep,find,ls,codemode' with mcp:true; verification 'read,grep,find,ls,bash' (runs tests, edits nothing); implementation 'read,grep,find,ls,bash,edit,write' (+ codemode, mcp:true when it needs online resources). Grant bash/edit/write only with cause" })),
 				noExtensions: Type.Optional(Type.Boolean({ description: "Drop all extensions incl. MCP (passes -ne)" })),
 				mcp: Type.Optional(Type.Boolean({ description: "true: connect MCP servers — the lane's tools must then name a route to them ('codemode' or 'tool_search'; an 'mcp__server__*' entry alone reaches only direct-exposure servers — pair it with codemode); default false — no MCP servers connect" })),
 			}),
@@ -245,8 +245,8 @@ const dispatchTool = defineTool({
 
 		let timeoutBin: string;
 		try {
-			timeoutBin = resolveExecutable(cfg.timeoutBin);
-			resolveExecutable(cfg.piBin);
+			timeoutBin = resolveExecutable(cfg.timeoutBin, "timeoutBin");
+			resolveExecutable(cfg.piBin, "piBin");
 		} catch (e) {
 			fs.closeSync(claimFd);
 			fs.unlinkSync(manifestPath);
@@ -350,8 +350,9 @@ const lanesTool = defineTool({
 		if (action === "status") {
 			const now = Date.now();
 			const statuses = deriveLanes(manifest.lanes, now);
+			// Same terminal gate as wait: collect is unblocked, so the peek chains the hint too.
 			return {
-				content: [{ type: "text", text: formatWaveStatus(params.wave, statuses) }],
+				content: [{ type: "text", text: formatWaveStatus(params.wave, statuses) + (statuses.every(terminalState) ? `\n${waitNextHint(params.wave)}` : "") }],
 				structuredContent: { wave: params.wave, lanes: statuses },
 				details: { wave: params.wave },
 			};
@@ -468,11 +469,11 @@ const lanesTool = defineTool({
 		for (const [i, lane] of collectScope.entries()) {
 			const status = collectStatuses[i];
 			if (status.cause === "spawn") {
-				results.push({ name: lane.name, reason: "never spawned — refused" });
+				results.push({ name: lane.name, reason: "never spawned — no artifact to collect" });
 				continue;
 			}
 			if (status.state === "running" || status.state === "starting") {
-				results.push({ name: lane.name, reason: "still running — refused" });
+				results.push({ name: lane.name, reason: `still running — lanes(wave='${params.wave}', action='wait') until terminal, then re-collect` });
 				continue;
 			}
 			// A corrupt transcript collects an empty suspect artifact — the wave stays releasable.

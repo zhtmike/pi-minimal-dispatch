@@ -58,6 +58,11 @@ check("slugs: malformed listed per violation", throwsWith(() => assertSlugs("Bad
 	&& throwsWith(() => assertSlugs("ok", ["UP", "UP"]), "duplicate lane 'UP'")
 	&& throwsWith(() => assertSlugs("ok", ["a".repeat(65)]), "lane 'aaaa"));
 check("slugs: duplicates reported even when well-formed", throwsWith(() => assertSlugs("w", ["lane", "lane"]), "duplicate lane 'lane'"));
+check(
+	"slugs: the refusal spells the shape and the leading-alphanumeric rule",
+	throwsWith(() => assertSlugs("-lead", ["ok"]), "must start alphanumeric") &&
+		throwsWith(() => assertSlugs("Bad_Slug", []), "lowercase letters/digits with hyphens inside"),
+);
 
 // --- missingBriefs ----------------------------------------------------------
 
@@ -108,11 +113,22 @@ fs.mkdirSync(path.join(bin, "dir-bin"), { recursive: true }); // X_OK passes on 
 fs.writeFileSync(path.join(bin, "noexec-bin"), "#!/bin/sh\nexit 0\n"); // no +x
 const prevPath = process.env.PATH;
 process.env.PATH = bin;
-check("executable: found and executable", resolveExecutable("good-bin").endsWith("good-bin"));
-check("executable: a directory on PATH is not an executable", throwsWith(() => resolveExecutable("dir-bin"), "not found"));
-check("executable: non-executable file is not found", throwsWith(() => resolveExecutable("noexec-bin"), "not found"));
-check("executable: absent name errors naming it", throwsWith(() => resolveExecutable("definitely-absent"), "'definitely-absent'"));
-check("executable: not-found names the config escape", throwsWith(() => resolveExecutable("definitely-absent"), "piBin/timeoutBin"));
+check("executable: found and executable", resolveExecutable("good-bin", "piBin").endsWith("good-bin"));
+check("executable: a directory on PATH is not an executable", throwsWith(() => resolveExecutable("dir-bin", "piBin"), "not found"));
+check("executable: non-executable file is not found", throwsWith(() => resolveExecutable("noexec-bin", "timeoutBin"), "not found"));
+check("executable: absent name errors naming it", throwsWith(() => resolveExecutable("definitely-absent", "piBin"), "'definitely-absent'"));
+let piBinMsg = "";
+try {
+	resolveExecutable("definitely-absent", "piBin");
+} catch (e: any) {
+	piBinMsg = e.message;
+}
+check(
+	"executable: not-found names its own config key only",
+	throwsWith(() => resolveExecutable("definitely-absent", "timeoutBin"), "set config's timeoutBin") &&
+		piBinMsg.includes("set config's piBin to its PATH-visible name") && !piBinMsg.includes("timeoutBin"),
+	piBinMsg,
+);
 if (prevPath === undefined) delete process.env.PATH;
 else process.env.PATH = prevPath;
 
@@ -460,8 +476,9 @@ check("briefs: an inline-brief lane needs no file", missingBriefs([{ name: "i", 
 	const notDir = path.join(wl, "not-a-dir");
 	fs.writeFileSync(notDir, "x");
 	check(
-		"inline briefs: a failed write aborts loudly naming the lane and path",
-		throwsWith(() => writeInlineBriefs("wv", [L("docs", { brief: "x" })], notDir), "could not write lane 'docs' brief"),
+		"inline briefs: a failed write aborts loudly naming the lane, path, and rollback",
+		throwsWith(() => writeInlineBriefs("wv", [L("docs", { brief: "x" })], notDir), "could not write lane 'docs' brief") &&
+			throwsWith(() => writeInlineBriefs("wv", [L("docs", { brief: "x" })], notDir), "nothing spawned, the wave slug was freed"),
 	);
 	fs.rmSync(wl, { recursive: true, force: true });
 }

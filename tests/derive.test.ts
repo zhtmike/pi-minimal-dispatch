@@ -529,9 +529,20 @@ fs.rmSync(workDir3, { recursive: true, force: true });
 
 	check(
 		"waveSlugsIn: manifest filenames only",
-		JSON.stringify(waveSlugsIn(dirA)) === JSON.stringify(["alpha"]) && JSON.stringify(waveSlugsIn(dirB).sort()) === JSON.stringify(["beta", "gamma"]),
+		JSON.stringify(waveSlugsIn(dirA)) === JSON.stringify(["alpha"]) && JSON.stringify(waveSlugsIn(dirB)) === JSON.stringify(["beta", "gamma"]),
 	);
 	check("waveSlugsIn: a missing dir is no suggestions, not a throw", waveSlugsIn(path.join(tmp, "nope")).length === 0);
+
+	const dirC = path.join(tmp, "scanC");
+	fs.mkdirSync(dirC, { recursive: true });
+	for (const w of ["zulu", "alpha-2", "mike"]) {
+		writeManifestAtomic({ version: 1, wave: w, workDir: dirC, createdAt: new Date().toISOString(), lanes: [] });
+	}
+	check(
+		"waveSlugsIn: slugs come back sorted regardless of creation order",
+		JSON.stringify(waveSlugsIn(dirC)) === JSON.stringify(["alpha-2", "mike", "zulu"]),
+		JSON.stringify(waveSlugsIn(dirC)),
+	);
 
 	const scans = scanWaves([dirA, dirB, dirA], "self", os.hostname(), Date.now());
 	const alpha = scans.find((s) => s.wave === "alpha")!;

@@ -118,13 +118,18 @@ blocks; waiting is the bounded `wait` call) live in the schemas — the
   policy — the tools support write-capable lanes the same way.
 - One brief per lane — inline (`brief`) or a file (`briefPath`) — is its
   entire prompt: goal, scope, expected deliverable and format, what not to
-  do, and a line stating the addressee is a dispatched leaf with no shared
-  context. Park briefs under a per-session subdirectory
-  (.pi/work/s/<session-id>/).
+  do, and lines stating the addressee is a dispatched leaf with no shared
+  context and that the lane's final message is its deliverable. Park briefs
+  under a per-session subdirectory (.pi/work/s/<session-id>/ — your session
+  id where the harness exposes it, else any unique per-session marker).
 - Tier the lane to the job — mechanical recon and investigation on a cheap
   fast model (pin `model`, add `thinking`), judgment and verdict work on
-  the strong model; grant bash only with cause. Valid `model` ids:
-  `pi --list-models`.
+  the strong model. Shape `tools` to the role: verification lanes take
+  bash (run tests, edit nothing), implementation lanes take
+  bash/edit/write, and any lane needing online resources takes
+  `mcp: true` + `codemode`. Name the covering tests in the brief — a lane
+  set to run an unscoped full suite eats its own deadline.
+  Valid `model` ids: `pi --list-models`.
 - Consume waves: wait (bounded) → collect → release; never hand-delete
   workDir contents while a lane may still be running.
 ```

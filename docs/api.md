@@ -25,10 +25,10 @@ the leash. Events stream to `<workDir>/<wave>-<name>.events.jsonl`.
 | `lanes[].name` | string | — | Lane slug: `kebab-case`, max 64 chars |
 | `lanes[].brief` | string? | — | Inline alternative to `briefPath` — the lane's entire prompt (non-empty); exactly one of `brief` or `briefPath`. Written to `<workDir>/<wave>-<name>-brief.md` after every lane validates and after the atomic slug claim — a claimed slug refuses before any file is touched, and a failed write rolls the claim back (nothing spawned, slug freed) — and the manifest records the written path as `briefPath` |
 | `lanes[].briefPath` | string? | — | Path to the lane's brief file (its `@file` prompt); exactly one of `briefPath` or `brief`. Briefs are written before the wave is claimed and the workDir is shared across concurrent sessions in the same directory, so brief paths at its root collide — park each session's briefs under its own subdirectory (e.g. `.pi/work/s/<session-id>/`) |
-| `lanes[].model` | string? | pi default | Pin a model id; omitted: pi's **configured default model** — not the dispatcher session's active model. Accepts pi's `id:thinking` suffix (e.g. `zai/glm-4.6:high`) |
+| `lanes[].model` | string? | pi default | Pin a model id; omitted: pi's **configured default model** — not the dispatcher session's active model. Accepts pi's `id:thinking` suffix (e.g. `zai/glm-4.6:high`); valid ids: `pi --list-models` |
 | `lanes[].thinking` | `off\|minimal\|low\|medium\|high\|xhigh\|max`? | none | Pin a thinking level (pi's `--thinking`); wins over any `:level` suffix in `model`; omitted: the model's `:level` suffix if present, else pi's configured default thinking level. pi clamps the level to the model's capabilities — status reports the actual level |
 | `lanes[].deadlineSec` | number? | `deadlineSec` config (900) | Leash in seconds; holds even if the dispatcher is gone. Minimum 1 |
-| `lanes[].tools` | string? | `read,grep,find,ls` | Tool allowlist for `--tools` — plain names or `*` patterns; no `+name`/`-name` modifiers, no shell quoting, not empty. Add `bash` when a lane must run commands (bash can still invoke git — and can write anywhere the dispatcher can: don't grant it to read-only lanes in a shared checkout; give write-capable lanes a scratch dir outside the repo; e.g. `read,grep,find,ls,bash,edit,write` for a write-capable lane). With MCP enabled, reach requires `codemode` or `tool_search` here — see [MCP and web reach](#mcp-and-web-reach) |
+| `lanes[].tools` | string? | `read,grep,find,ls` | Tool allowlist for `--tools` — plain names or `*` patterns; no `+name`/`-name` modifiers, no shell quoting, not empty. Role shapes: research+web `read,grep,find,ls,codemode` (`mcp:true`); verification `read,grep,find,ls,bash` (runs tests, edits nothing); implementation `read,grep,find,ls,bash,edit,write` (`+ codemode`, `mcp:true` when it needs online resources). bash can still invoke git — and can write anywhere the dispatcher can: don't grant it to read-only lanes in a shared checkout; give write-capable lanes a scratch dir outside the repo. With MCP enabled, reach requires `codemode` or `tool_search` here — see [MCP and web reach](#mcp-and-web-reach) |
 | `lanes[].noExtensions` | boolean? | false | Drop all extensions incl. MCP (passes `-ne`) |
 | `lanes[].mcp` | boolean? | `false` (offline) | Set `true` to connect MCP servers (`false` passes `--no-mcp` — no MCP servers connect). With MCP enabled, `tools` must name `codemode` or `tool_search` or the call is rejected — servers connecting alone never declares MCP tools to the lane |
 | `workDir` | string? | `workDir` config (`.pi/work`) | Directory for the wave's files — briefs, events, artifacts, manifest |
@@ -38,7 +38,8 @@ with each lane's pid, paths, and deadline. The text ends with a one-line
 `[next: lanes(wave=…, action='wait') …]` hint — the blocking call that replaces
 status polling. The hints chain the whole workflow through results, not
 schema prose: a `wait` that leaves every lane terminal appends the `collect`
-hint; a `collect` after which release is unblocked appends the `release`
+hint — a fully terminal `status` appends the same; a `collect` after which
+release is unblocked appends the `release`
 hint. The manifest also records the dispatcher's `owner` — `{ sid, pid,
 host, lstart }` (`lstart`: the process start token — `/proc/<pid>/stat` ticks
 on Linux, `ps -o lstart=` elsewhere) — which the `kill` and `release` actions
@@ -116,14 +117,15 @@ fresh one after the dispatcher exited — sees the same truth.
 A parameter its action does not accept (`lane`, `waitMode`, `waitSec`,
 `inlineMaxBytes`) is rejected with an error naming the actions that take it —
 never silently ignored. An unknown `wave` errors with the expected manifest
-path and enumerates the workDir's live waves (`no live waves` when there are
-none).
+path and enumerates the workDir's live waves, sorted (`no live waves` when
+there are none).
 
 ### `status`
 
 Per-lane `structuredContent` entries. Note: `settled` only means the
 `agent_settled` event was seen — success is `collect` returning
-`suspect: false`.
+`suspect: false`. A result with every lane terminal ends with the same
+`[next: … collect …]` hint `wait` emits.
 
 | Field | Type | Meaning |
 |---|---|---|
@@ -291,7 +293,7 @@ A slow lane is diagnosed from its tail, not its head:
 `tool_execution_start`/`_end` pair by `toolCallId` (an unmatched start is an
 in-flight tool), and `agent_settled` marks the end. There is no `peek`
 action by design; the general tools are the diagnosis surface. Wave
-discovery stays `ls <workDir>/*-manifest.json`.
+discovery: an unknown-wave refusal enumerates the workDir's live waves.
 
 ## Status bar & `/lanes`
 
@@ -372,7 +374,7 @@ The lane protocol itself is fixed — every lane runs `--mode json --no-session
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `workDir` | string | `.pi/work` | Default wave directory |
+| `workDir` | string | `.pi/work` | Default wave directory, resolved against the project working directory |
 | `deadlineSec` | number | `900` | Default lane leash (integer ≥ 1) |
 | `killGraceMs` | number | `5000` | SIGTERM→SIGKILL grace in the `kill` action; also the leash's `timeout -k` escalation (integer ≥ 100) |
 | `pollMs` | number | `2000` | Poll interval for `wait`'s re-derive cadence and the statusbar (integer ≥ 100) — the knob for failure-detection latency in `wait` |

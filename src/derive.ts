@@ -751,13 +751,14 @@ export type WaveScan =
 		}
 	| { ok: false; wave: string; workDir: string; error: string };
 
-/** Wave slugs discoverable in `workDir` from `*-manifest.json` filenames — no parsing, cheap enough for completion. */
+/** Wave slugs discoverable in `workDir` from `*-manifest.json` filenames — sorted, no parsing, cheap enough for completion. */
 export function waveSlugsIn(workDir: string): string[] {
 	try {
 		return fs
 			.readdirSync(workDir)
 			.filter((f) => f.endsWith("-manifest.json"))
-			.map((f) => f.slice(0, -"-manifest.json".length));
+			.map((f) => f.slice(0, -"-manifest.json".length))
+			.sort((a, b) => a.localeCompare(b));
 	} catch {
 			return []; // unreadable dir = no suggestions, not a crash
 	}

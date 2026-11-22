@@ -233,8 +233,11 @@ check(
 	formatCollectEntry({ ...okEntry, suspect: true, suspectCause: "failed:deadline" }, 0) === "  docs: /w/w-docs.md [SUSPECT: failed:deadline] stop:stop",
 );
 check(
-	"collect line: refused lane renders its reason",
-	formatCollectEntry({ name: "docs", reason: "still running — refused" }, 1 << 20) === "  docs: still running — refused",
+	"collect line: refused lane renders its reason verbatim",
+	(() => {
+		const reason = "still running — lanes(wave='survey', action='wait') until terminal, then re-collect";
+		return formatCollectEntry({ name: "docs", reason }, 1 << 20) === `  docs: ${reason}`;
+	})(),
 );
 check(
 	"collect inline: suspect never inlines however small",

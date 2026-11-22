@@ -41,6 +41,30 @@ dispatch, adds a tiering recipe and the `pi --list-models` pointer, and the
 child-marker (`PI_MINIMAL_DISPATCH_CHILD=1`) is documented in api.md as part
 of the lane protocol — renaming it is a breaking change.
 
+**Ease-of-use hardening.** Every refusal names its fix, and the role shapes are first-class:
+
+- `status` chains the `[next: … collect …]` hint once every lane is terminal —
+  the same gate `wait` uses — so the peek no longer dead-ends the
+  dispatch → collect → release loop.
+- Collect refusals name the unblocking call: a still-running lane points at
+  `lanes(wave='<wave>', action='wait') until terminal, then re-collect`; a
+  never-spawned lane reads `no artifact to collect`.
+- The brief recipe states the deliverable: the `dispatch` description and
+  README's policy block say the lane's final message is its deliverable.
+- `tools` carries three role shapes — research+web (`mcp: true` + `codemode`),
+  verification (`bash` for tests, no edits), implementation
+  (`bash,edit,write`) — in the schema, api.md, and README alike; the
+  `model` description points at `pi --list-models`.
+- README's policy block names the covering tests in the brief (an unscoped
+  full suite eats the lane's own deadline) and offers the session-id
+  parking fallback; api.md's `workDir` row states its resolution base.
+- `waveSlugsIn` sorts its listing — unknown-wave refusals and the
+  default-model cap census are stable across calls.
+- Error precision: the slug refusal spells out kebab-case (a leading `-`
+  was never valid); the executable-not-found refusal names the failing
+  config key (`timeoutBin`/`piBin`) instead of listing both; an inline-brief
+  write failure notes the rollback (nothing spawned, slug freed).
+
 ## 0.5.6 — 2026-11-21
 
 The statusbar line self-labels inside brackets — `[lanes: …]` — matching

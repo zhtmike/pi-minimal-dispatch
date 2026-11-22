@@ -44,7 +44,7 @@ export function assertSlugs(wave: string, names: string[]): void {
 	for (const n of names) if (!SLUG.test(n)) bad.push(`lane '${n}'`);
 	const dupes = names.filter((n, i) => names.indexOf(n) !== i);
 	for (const d of new Set(dupes)) bad.push(`duplicate lane '${d}'`);
-	if (bad.length > 0) throw new Error(`slugs must be kebab-case [a-z0-9-], max 64 chars, unique: ${bad.join(", ")}`);
+	if (bad.length > 0) throw new Error(`slugs must be kebab-case: lowercase letters/digits with hyphens inside (must start alphanumeric), max 64 chars, unique: ${bad.join(", ")}`);
 }
 
 /** Exactly one of briefPath or brief — the refusal names both params; an empty brief is neither. */
@@ -90,8 +90,8 @@ export function waveClaimedError(wave: string, manifestPath: string): string {
 	);
 }
 
-/** Resolve an executable on PATH; a directory on PATH is not an executable. */
-export function resolveExecutable(name: string): string {
+/** Resolve an executable on PATH; a directory on PATH is not an executable. The refusal names the owning config key. */
+export function resolveExecutable(name: string, configKey: string): string {
 	for (const dir of (process.env.PATH ?? "").split(path.delimiter)) {
 		if (!dir) continue;
 		const p = path.join(dir, name);
@@ -103,7 +103,7 @@ export function resolveExecutable(name: string): string {
 			// keep scanning
 		}
 	}
-	throw new Error(`executable '${name}' not found on PATH — install it, or set config's piBin/timeoutBin to its PATH-visible name (macOS coreutils: gtimeout)`);
+	throw new Error(`executable '${name}' not found on PATH — install it, or set config's ${configKey} to its PATH-visible name (macOS coreutils: gtimeout)`);
 }
 
 /** Parse a `tools` string exactly as pi parses `--tools`: split on commas, trim, drop empties. */
@@ -202,7 +202,7 @@ export function writeInlineBriefs(wave: string, lanes: LaneParams[], workDir: st
 		try {
 			fs.writeFileSync(p, lane.brief);
 		} catch (e: any) {
-			throw new Error(`could not write lane '${lane.name}' brief to ${p}: ${e.message}`);
+			throw new Error(`could not write lane '${lane.name}' brief to ${p}: ${e.message} — nothing spawned, the wave slug was freed`);
 		}
 		lane.briefPath = p;
 	}
