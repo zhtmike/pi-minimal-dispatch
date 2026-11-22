@@ -26,10 +26,11 @@ one deliberately small surface.
 
 ## Design pillars
 
-1. **No personas, no role play.** A lane is a brief file plus optional
-   `model`/`thinking` pins — no agent roster, no per-role system prompts,
-   no character frontmatter. The dispatching agent keeps the judgment: it
-   writes each brief, so it decides what each lane is. Persona frameworks
+1. **No personas, no role play.** A lane is a brief — inline (`brief`) or
+   a file (`briefPath`) — plus optional `model`/`thinking` pins — no agent
+   roster, no per-role system prompts, no character frontmatter. The
+   dispatching agent keeps the judgment: it writes each brief, so it
+   decides what each lane is. Persona frameworks
    encode yesterday's division of labor; briefs encode today's.
 2. **The filesystem is the whole protocol.** Briefs in, per-lane JSONL
    event streams, one JSON manifest, `<wave>-<name>.md` artifacts out. No

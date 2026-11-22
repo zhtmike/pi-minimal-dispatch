@@ -10,6 +10,7 @@ import * as path from "node:path";
 import {
 	assertActionParams,
 	assertBriefTools,
+	assertBriefXor,
 	assertDefaultLaneCap,
 	assertLaneTools,
 	assertSlugs,
@@ -28,6 +29,7 @@ import {
 	selectKillTargets,
 	toolEntries,
 	waveClaimedError,
+	writeInlineBriefs,
 } from "../src/lane.ts";
 import type { LaneParams } from "../src/lane.ts";
 import type { LaneRecord, WaveScan } from "../src/derive.ts";
@@ -56,6 +58,11 @@ check("slugs: malformed listed per violation", throwsWith(() => assertSlugs("Bad
 	&& throwsWith(() => assertSlugs("ok", ["UP", "UP"]), "duplicate lane 'UP'")
 	&& throwsWith(() => assertSlugs("ok", ["a".repeat(65)]), "lane 'aaaa"));
 check("slugs: duplicates reported even when well-formed", throwsWith(() => assertSlugs("w", ["lane", "lane"]), "duplicate lane 'lane'"));
+check(
+	"slugs: the refusal spells the shape and the leading-alphanumeric rule",
+	throwsWith(() => assertSlugs("-lead", ["ok"]), "must start alphanumeric") &&
+		throwsWith(() => assertSlugs("Bad_Slug", []), "lowercase letters/digits with hyphens inside"),
+);
 
 // --- missingBriefs ----------------------------------------------------------
 
@@ -106,11 +113,22 @@ fs.mkdirSync(path.join(bin, "dir-bin"), { recursive: true }); // X_OK passes on 
 fs.writeFileSync(path.join(bin, "noexec-bin"), "#!/bin/sh\nexit 0\n"); // no +x
 const prevPath = process.env.PATH;
 process.env.PATH = bin;
-check("executable: found and executable", resolveExecutable("good-bin").endsWith("good-bin"));
-check("executable: a directory on PATH is not an executable", throwsWith(() => resolveExecutable("dir-bin"), "not found"));
-check("executable: non-executable file is not found", throwsWith(() => resolveExecutable("noexec-bin"), "not found"));
-check("executable: absent name errors naming it", throwsWith(() => resolveExecutable("definitely-absent"), "'definitely-absent'"));
-check("executable: not-found names the config escape", throwsWith(() => resolveExecutable("definitely-absent"), "piBin/timeoutBin"));
+check("executable: found and executable", resolveExecutable("good-bin", "piBin").endsWith("good-bin"));
+check("executable: a directory on PATH is not an executable", throwsWith(() => resolveExecutable("dir-bin", "piBin"), "not found"));
+check("executable: non-executable file is not found", throwsWith(() => resolveExecutable("noexec-bin", "timeoutBin"), "not found"));
+check("executable: absent name errors naming it", throwsWith(() => resolveExecutable("definitely-absent", "piBin"), "'definitely-absent'"));
+let piBinMsg = "";
+try {
+	resolveExecutable("definitely-absent", "piBin");
+} catch (e: any) {
+	piBinMsg = e.message;
+}
+check(
+	"executable: not-found names its own config key only",
+	throwsWith(() => resolveExecutable("definitely-absent", "timeoutBin"), "set config's timeoutBin") &&
+		piBinMsg.includes("set config's piBin to its PATH-visible name") && !piBinMsg.includes("timeoutBin"),
+	piBinMsg,
+);
 if (prevPath === undefined) delete process.env.PATH;
 else process.env.PATH = prevPath;
 
@@ -131,9 +149,15 @@ check(
 );
 const bare = buildLaneArgs({ name: "x", briefPath: "b.md" }, cfg, 900, 5);
 check(
-	"argv: omitted tools defaults to the read-only allowlist",
-	bare[bare.indexOf("--tools") + 1] === "read,grep,find,ls" && bare.length === 11,
+	"argv: omitted tools defaults to the read-only allowlist; omitted mcp spawns offline (--no-mcp)",
+	bare[bare.indexOf("--tools") + 1] === "read,grep,find,ls" && bare.includes("--no-mcp") && bare.length === 12,
 	JSON.stringify(bare),
+);
+const online = buildLaneArgs({ name: "x", briefPath: "b.md", mcp: true }, cfg, 900, 5);
+check(
+	"argv: mcp:true drops --no-mcp (explicit opt-in)",
+	!online.includes("--no-mcp"),
+	JSON.stringify(online),
 );
 const both = buildLaneArgs({ name: "x", briefPath: "b.md", model: "m1:low", thinking: "high" }, cfg, 900, 5);
 check(
@@ -166,15 +190,19 @@ check(
 	})(),
 );
 check(
-	"lane tools: default lane (no tools, mcp on) is rejected as blind",
-	throwsWith(() => assertLaneTools([L("web")]), "lane 'web'") && throwsWith(() => assertLaneTools([L("web")]), "no route to MCP tools"),
+	"lane tools: offline default lane (no tools, no mcp) passes",
+	(() => { assertLaneTools([L("a")]); return true; })(),
+);
+check(
+	"lane tools: mcp:true default tools are rejected as blind",
+	throwsWith(() => assertLaneTools([L("web", { mcp: true })]), "lane 'web'") && throwsWith(() => assertLaneTools([L("web", { mcp: true })]), "no route to MCP tools"),
 );
 check(
 	"lane tools: rejection names both remedies",
-	throwsWith(() => assertLaneTools([L("web")]), "codemode") && throwsWith(() => assertLaneTools([L("web")]), "mcp:false"),
+	throwsWith(() => assertLaneTools([L("web", { mcp: true })]), "codemode") && throwsWith(() => assertLaneTools([L("web", { mcp: true })]), "drop mcp:true"),
 );
-check("lane tools: mcp:false default tools pass", (() => { assertLaneTools([L("a", { mcp: false }), L("b", { tools: "read,bash", mcp: false })]); return true; })());
-check("lane tools: noExtensions:true skips the reach check", (() => { assertLaneTools([L("a", { noExtensions: true })]); return true; })());
+check("lane tools: mcp:false and omitted-mcp default tools pass", (() => { assertLaneTools([L("a", { mcp: false }), L("b", { tools: "read,bash", mcp: false }), L("c")]); return true; })());
+check("lane tools: noExtensions:true skips the reach check even with mcp:true", (() => { assertLaneTools([L("a", { noExtensions: true, mcp: true })]); return true; })());
 check(
 	"lane tools: every exposure-independent reach route passes with mcp enabled",
 	(() => {
@@ -185,22 +213,22 @@ check(
 			"read,*", // catch-all pattern names codemode too
 			"read, codemode", // trimmed like pi
 		]) {
-			assertLaneTools([L("x", { tools })]);
+			assertLaneTools([L("x", { tools, mcp: true })]);
 		}
 		return true;
 	})(),
 );
 check(
 	"lane tools: mcp__ entries alone are not a route (exposure-dependent)",
-	throwsWith(() => assertLaneTools([L("web", { tools: "read,grep,find,ls,mcp__websearch__*" })]), "direct-exposure") &&
-		throwsWith(() => assertLaneTools([L("web", { tools: "read,mcp__websearch__web_search" })]), "no route to MCP tools") &&
-		throwsWith(() => assertLaneTools([L("web", { tools: "read,mcp*" })]), "no route to MCP tools") &&
-		throwsWith(() => assertLaneTools([L("web", { tools: "read,read_mcp_resource" })]), "no route to MCP tools"),
+	throwsWith(() => assertLaneTools([L("web", { tools: "read,grep,find,ls,mcp__websearch__*", mcp: true })]), "direct-exposure") &&
+		throwsWith(() => assertLaneTools([L("web", { tools: "read,mcp__websearch__web_search", mcp: true })]), "no route to MCP tools") &&
+		throwsWith(() => assertLaneTools([L("web", { tools: "read,mcp*", mcp: true })]), "no route to MCP tools") &&
+		throwsWith(() => assertLaneTools([L("web", { tools: "read,read_mcp_resource", mcp: true })]), "no route to MCP tools"),
 );
 check(
 	"lane tools: shell-quoted entries are rejected even offline",
 	throwsWith(() => assertLaneTools([L("x", { tools: "'read','bash'", mcp: false })]), "shell quoting") &&
-		throwsWith(() => assertLaneTools([L("web", { tools: "read,grep,find,ls,'mcp__websearch__*'" })]), "shell quoting"),
+		throwsWith(() => assertLaneTools([L("web", { tools: "read,grep,find,ls,'mcp__websearch__*'", mcp: true })]), "shell quoting"),
 );
 check(
 	"lane tools: +name/-name modifiers are rejected as silent widening",
@@ -214,8 +242,8 @@ check(
 );
 check(
 	"lane tools: every offending lane is listed in one error",
-	throwsWith(() => assertLaneTools([L("a", { mcp: false }), L("b"), L("c")]), "lane 'b'") &&
-		throwsWith(() => assertLaneTools([L("a", { mcp: false }), L("b"), L("c")]), "lane 'c'"),
+	throwsWith(() => assertLaneTools([L("a", { mcp: false }), L("b", { mcp: true }), L("c", { mcp: true })]), "lane 'b'") &&
+		throwsWith(() => assertLaneTools([L("a", { mcp: false }), L("b", { mcp: true }), L("c", { mcp: true })]), "lane 'c'"),
 );
 
 // --- selectKillTargets ------------------------------------------------------
@@ -307,6 +335,17 @@ check(
 		throwsWith(() => assertActionParams("collect", { inlineMaxBytes: 1.5 }), "integer >= 0") &&
 		throwsWith(() => assertActionParams("collect", { inlineMaxBytes: "512" }), "integer >= 0"),
 );
+check(
+	"action params: waitSec accepted by wait only, rejected elsewhere naming wait (no legacy silent-ignore)",
+	(() => {
+		assertActionParams("wait", { waitSec: 30 });
+		return (
+			throwsWith(() => assertActionParams("status", { waitSec: 30 }), "'waitSec'") &&
+			throwsWith(() => assertActionParams("status", { waitSec: 30 }), "applies only to: wait") &&
+			throwsWith(() => assertActionParams("kill", { waitSec: 30 }), "'kill'")
+		);
+	})(),
+);
 
 // --- resolveLaneFilter ------------------------------------------------------
 
@@ -397,6 +436,52 @@ check(
 	"brief tools: a wildcard tools entry granting bash passes a fenced block",
 	assertBriefTools([BL({ tools: "read,*" })]) === undefined,
 );
+check(
+	"brief tools: an inline brief's fenced bash block demands bash too",
+	throwsWith(() => assertBriefTools([{ name: "ib", brief: "run:\n```bash\nnpm i\n```\n" }]), "grants no 'bash'"),
+);
+
+// --- assertBriefXor ---------------------------------------------------------
+
+check("brief xor: briefPath alone passes", (() => { assertBriefXor([L("a")]); return true; })());
+check("brief xor: brief alone passes", (() => { assertBriefXor([L("a", { brief: "do it", briefPath: undefined })]); return true; })());
+check(
+	"brief xor: both given is refused, naming both params and the conflict",
+	throwsWith(() => assertBriefXor([L("a", { brief: "x" })]), "briefPath or brief") &&
+		throwsWith(() => assertBriefXor([L("a", { brief: "x" })]), "both given"),
+);
+check("brief xor: neither given is refused", throwsWith(() => assertBriefXor([{ name: "a" }]), "neither given"));
+check("brief xor: an empty brief is neither — refused as empty, not spawned", throwsWith(() => assertBriefXor([{ name: "a", brief: "" }]), "must not be empty"));
+check(
+	"brief xor: every offending lane is listed",
+	throwsWith(() => assertBriefXor([{ name: "a" }, L("b", { brief: "x" }), L("c", { brief: "y" })]), "lane 'c'"),
+);
+check("briefs: an inline-brief lane needs no file", missingBriefs([{ name: "i", brief: "x" }]).length === 0);
+
+// --- writeInlineBriefs ------------------------------------------------------
+
+{
+	const wl = fs.mkdtempSync(path.join(os.tmpdir(), "pi-minimal-dispatch-inline-"));
+	const inline = [L("docs", { brief: "# brief\nread the module\n", briefPath: undefined }), L("filed", { briefPath: path.join(wl, "f.md") })];
+	writeInlineBriefs("wv", inline, wl);
+	check(
+		"inline briefs: content written verbatim to <wave>-<name>-brief.md, path recorded as briefPath",
+		inline[0].briefPath === path.join(wl, "wv-docs-brief.md") && fs.readFileSync(inline[0].briefPath!, "utf8") === "# brief\nread the module\n",
+		JSON.stringify(inline[0]),
+	);
+	check(
+		"inline briefs: lanes with briefPath are untouched",
+		!fs.existsSync(path.join(wl, "f.md")) && inline[1].briefPath === path.join(wl, "f.md"),
+	);
+	const notDir = path.join(wl, "not-a-dir");
+	fs.writeFileSync(notDir, "x");
+	check(
+		"inline briefs: a failed write aborts loudly naming the lane, path, and rollback",
+		throwsWith(() => writeInlineBriefs("wv", [L("docs", { brief: "x" })], notDir), "could not write lane 'docs' brief") &&
+			throwsWith(() => writeInlineBriefs("wv", [L("docs", { brief: "x" })], notDir), "nothing spawned, the wave slug was freed"),
+	);
+	fs.rmSync(wl, { recursive: true, force: true });
+}
 
 fs.rmSync(tmp, { recursive: true, force: true });
 

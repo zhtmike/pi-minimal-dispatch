@@ -1,5 +1,70 @@
 # Changelog
 
+## 0.6.0 — 2026-11-22
+
+**Breaking: the default lane is offline — `mcp` now defaults to `false`.**
+Every lane spawns with `--no-mcp` unless it opts in with `mcp: true`; the
+MCP-route refusal (`tools` naming neither `codemode` nor `tool_search`) fires
+only on that explicit opt-in, and its remedy line names `drop mcp:true` instead
+of `mcp:false`. Calls that passed `mcp: false` explicitly are unaffected; calls
+that relied on the old enabled-by-default behavior must now pass `mcp: true`.
+The default lane's connected-server dead weight goes away, and the schema
+description carries the opt-in contract (route tools, the `mcp__` scope caveat).
+
+**Inline briefs.** Each lane accepts `brief` (string) as an exclusive
+alternative to `briefPath` — exactly one is required, and the validation error
+names both params. Inline content is written to
+`<workDir>/<wave>-<name>-brief.md` after every lane validates and after the
+atomic slug claim — a claimed-slug re-dispatch refuses before any file is
+touched, and a failed write rolls the claim back (nothing spawned, slug
+freed) — and the manifest records the written
+path as `briefPath`, so spawn, collect, and release treat every lane alike.
+The bash-fence check (`assertBriefTools`) reads inline content the same as
+brief files.
+
+**`waitSec` outside `wait` is refused.** The last silent-ignore carve-out in
+the action×parameter boundary is gone: `waitSec` paired with any non-`wait`
+action throws, naming the action that accepts it, exactly like
+`lane`/`waitMode`/`inlineMaxBytes` already did. The `waitSec` schema description
+drops its "wait action only" prefix — the error teaches it.
+
+**Unknown-wave refusals enumerate live waves.** The refusal now lists the
+sibling wave slugs found in the workDir (or `no live waves` when there are
+none), so the caller no longer needs an `ls` round-trip to find the wave it
+meant.
+
+**Schema text tightened.** The `dispatch` description carries the
+brief-or-file contract and the shared-workDir caution; `tools` gains a
+write-capable example set; `noExtensions` and `workDir` descriptions reworded.
+README's when-to-dispatch policy block goes stance-neutral on implementation
+dispatch, adds a tiering recipe and the `pi --list-models` pointer, and the
+child-marker (`PI_MINIMAL_DISPATCH_CHILD=1`) is documented in api.md as part
+of the lane protocol — renaming it is a breaking change.
+
+**Ease-of-use hardening.** Every refusal names its fix, and the role shapes are first-class:
+
+- `status` chains the `[next: … collect …]` hint once every lane is terminal —
+  the same gate `wait` uses — so the peek no longer dead-ends the
+  dispatch → collect → release loop.
+- Collect refusals name the unblocking call: a still-running lane points at
+  `lanes(wave='<wave>', action='wait') until terminal, then re-collect`; a
+  never-spawned lane reads `no artifact to collect`.
+- The brief recipe states the deliverable: the `dispatch` description and
+  README's policy block say the lane's final message is its deliverable.
+- `tools` carries three role shapes — research+web (`mcp: true` + `codemode`),
+  verification (`bash` for tests, no edits), implementation
+  (`bash,edit,write`) — in the schema, api.md, and README alike; the
+  `model` description points at `pi --list-models`.
+- README's policy block names the covering tests in the brief (an unscoped
+  full suite eats the lane's own deadline) and offers the session-id
+  parking fallback; api.md's `workDir` row states its resolution base.
+- `waveSlugsIn` sorts its listing — unknown-wave refusals and the
+  default-model cap census are stable across calls.
+- Error precision: the slug refusal spells out kebab-case (a leading `-`
+  was never valid); the executable-not-found refusal names the failing
+  config key (`timeoutBin`/`piBin`) instead of listing both; an inline-brief
+  write failure notes the rollback (nothing spawned, slug freed).
+
 ## 0.5.6 — 2026-11-21
 
 The statusbar line self-labels inside brackets — `[lanes: …]` — matching

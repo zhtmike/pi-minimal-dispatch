@@ -80,12 +80,17 @@ export function manifestPathFor(workDir: string, wave: string): string {
 /** Read and parse a wave manifest; throws with the path when absent or invalid. */
 export function readManifest(workDir: string, wave: string): Manifest {
 	const p = manifestPathFor(workDir, wave);
-	const unknown = new Error(`unknown wave '${wave}' (no manifest at ${p}) — list live waves: ls ${path.dirname(p)}/*-manifest.json`);
 	let raw: string;
 	try {
 		raw = fs.readFileSync(p, "utf8");
 	} catch (e: any) {
-		if (e.code === "ENOENT") throw unknown;
+		if (e.code === "ENOENT") {
+			// The refusal enumerates sibling slugs so the caller never needs an ls round-trip
+			// to find the wave it meant — bounded to the workDir's manifests.
+			const live = waveSlugsIn(workDir);
+			const listing = live.length > 0 ? `live waves: ${live.join(", ")}` : "no live waves";
+			throw new Error(`unknown wave '${wave}' (no manifest at ${p}) — ${listing}`);
+		}
 		throw e;
 	}
 	if (raw === "") throw new Error(`manifest for wave '${wave}' at ${p} is empty — a dispatch may be mid-publish; retry`);
@@ -746,13 +751,14 @@ export type WaveScan =
 		}
 	| { ok: false; wave: string; workDir: string; error: string };
 
-/** Wave slugs discoverable in `workDir` from `*-manifest.json` filenames — no parsing, cheap enough for completion. */
+/** Wave slugs discoverable in `workDir` from `*-manifest.json` filenames — sorted, no parsing, cheap enough for completion. */
 export function waveSlugsIn(workDir: string): string[] {
 	try {
 		return fs
 			.readdirSync(workDir)
 			.filter((f) => f.endsWith("-manifest.json"))
-			.map((f) => f.slice(0, -"-manifest.json".length));
+			.map((f) => f.slice(0, -"-manifest.json".length))
+			.sort((a, b) => a.localeCompare(b));
 	} catch {
 			return []; // unreadable dir = no suggestions, not a crash
 	}

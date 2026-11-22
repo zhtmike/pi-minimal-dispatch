@@ -24,7 +24,10 @@ const MCP_REACH_TOOLS = ["codemode", "tool_search"];
 /** Lane parameters as they arrive from the dispatch tool. */
 export type LaneParams = {
 	name: string;
-	briefPath: string;
+	/** Brief file path; exactly one of briefPath/brief (assertBriefXor). */
+	briefPath?: string;
+	/** Inline brief content — materialized to `<workDir>/<wave>-<name>-brief.md` after the atomic slug claim (writeInlineBriefs). */
+	brief?: string;
 	model?: string;
 	/** pi's --thinking vocabulary; wins over any `:level` suffix on model. */
 	thinking?: string;
@@ -41,13 +44,28 @@ export function assertSlugs(wave: string, names: string[]): void {
 	for (const n of names) if (!SLUG.test(n)) bad.push(`lane '${n}'`);
 	const dupes = names.filter((n, i) => names.indexOf(n) !== i);
 	for (const d of new Set(dupes)) bad.push(`duplicate lane '${d}'`);
-	if (bad.length > 0) throw new Error(`slugs must be kebab-case [a-z0-9-], max 64 chars, unique: ${bad.join(", ")}`);
+	if (bad.length > 0) throw new Error(`slugs must be kebab-case: lowercase letters/digits with hyphens inside (must start alphanumeric), max 64 chars, unique: ${bad.join(", ")}`);
 }
 
-/** Resolved absolute paths of every lane brief that does not exist as a file. */
+/** Exactly one of briefPath or brief — the refusal names both params; an empty brief is neither. */
+export function assertBriefXor(lanes: LaneParams[]): void {
+	const problems: string[] = [];
+	for (const lane of lanes) {
+		const given = (lane.briefPath !== undefined ? 1 : 0) + (lane.brief !== undefined ? 1 : 0);
+		if (given !== 1) {
+			problems.push(`lane '${lane.name}': exactly one of briefPath or brief is required — ${given === 0 ? "neither given" : "both given"}`);
+		} else if (lane.brief === "") {
+			problems.push(`lane '${lane.name}': brief must not be empty — pass the prompt or use briefPath`);
+		}
+	}
+	if (problems.length > 0) throw new Error(problems.join("\n"));
+}
+
+/** Resolved absolute paths of every file-brief lane whose brief does not exist (inline briefs need no file). */
 export function missingBriefs(lanes: LaneParams[], cwd: string = process.cwd()): string[] {
 	const missing: string[] = [];
 	for (const lane of lanes) {
+		if (lane.briefPath === undefined) continue; // inline brief — no file yet at check time; written after the claim
 		const abs = path.resolve(cwd, lane.briefPath);
 		if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) missing.push(abs);
 	}
@@ -72,8 +90,8 @@ export function waveClaimedError(wave: string, manifestPath: string): string {
 	);
 }
 
-/** Resolve an executable on PATH; a directory on PATH is not an executable. */
-export function resolveExecutable(name: string): string {
+/** Resolve an executable on PATH; a directory on PATH is not an executable. The refusal names the owning config key. */
+export function resolveExecutable(name: string, configKey: string): string {
 	for (const dir of (process.env.PATH ?? "").split(path.delimiter)) {
 		if (!dir) continue;
 		const p = path.join(dir, name);
@@ -85,7 +103,7 @@ export function resolveExecutable(name: string): string {
 			// keep scanning
 		}
 	}
-	throw new Error(`executable '${name}' not found on PATH — install it, or set config's piBin/timeoutBin to its PATH-visible name (macOS coreutils: gtimeout)`);
+	throw new Error(`executable '${name}' not found on PATH — install it, or set config's ${configKey} to its PATH-visible name (macOS coreutils: gtimeout)`);
 }
 
 /** Parse a `tools` string exactly as pi parses `--tools`: split on commas, trim, drop empties. */
@@ -99,11 +117,6 @@ export function toolEntries(lane: LaneParams): string[] {
 /** A fenced bash/shell block in a brief is an instruction to run — bash must be granted. */
 const BRIEF_SHELL_FENCE = /^```(bash|sh|shell|zsh)\s*$/m;
 
-/** Whether the brief file carries a fenced shell block (a runnable command, not quoted output). */
-export function briefDemandsBash(briefPath: string): boolean {
-	return BRIEF_SHELL_FENCE.test(fs.readFileSync(briefPath, "utf8"));
-}
-
 /** Whether a `--tools` entry matches a tool name — exact, or a `*` pattern anchored both ends (pi's matcher). */
 function entryMatches(entry: string, name: string): boolean {
 	if (!entry.includes("*")) return entry === name;
@@ -115,8 +128,8 @@ function entryMatches(entry: string, name: string): boolean {
  * Validate every lane's `tools` at the tool boundary. An allowlist names plain
  * tools or `*` patterns — `+name`/`-name` lists are not allowlists: pi applies
  * them to its default selection and would silently grant `bash`/`edit`/`write`.
- * A lane that leaves MCP enabled must name `codemode` or `tool_search`, else
- * its connected servers stay unreachable dead weight.
+ * MCP is off by default; a lane that opts in with `mcp: true` must name
+ * `codemode` or `tool_search`, else its connected servers stay unreachable dead weight.
  */
 export function assertLaneTools(lanes: LaneParams[]): void {
 	const problems: string[] = [];
@@ -142,13 +155,13 @@ export function assertLaneTools(lanes: LaneParams[]): void {
 			problems.push(`lane '${lane.name}': tools allowlist is empty — name at least one tool`);
 			continue;
 		}
-		if (lane.mcp === false || lane.noExtensions === true) continue; // MCP never connects
+		if (lane.mcp !== true || lane.noExtensions === true) continue; // offline default — MCP connects only on explicit opt-in
 		const hasRoute = entries.some((e) => MCP_REACH_TOOLS.some((t) => entryMatches(e, t)));
 		if (!hasRoute) {
 			problems.push(
-				`lane '${lane.name}': MCP left enabled but tools '${lane.tools ?? DEFAULT_LANE_TOOLS}' grants no route to MCP tools — ` +
+				`lane '${lane.name}': mcp:true but tools '${lane.tools ?? DEFAULT_LANE_TOOLS}' grants no route to MCP tools — ` +
 					"name 'codemode' or 'tool_search' (an 'mcp__server__*' entry alone reaches only direct-exposure servers; pair it with codemode), " +
-					"or set mcp:false — entries reach pi verbatim, no shell quoting",
+					"or drop mcp:true — entries reach pi verbatim, no shell quoting",
 			);
 		}
 	}
@@ -165,8 +178,8 @@ export function assertBriefTools(lanes: LaneParams[], cwd: string = process.cwd(
 	for (const lane of lanes) {
 		// `*` patterns count — pi's matcher, not a literal scan, decides what a lane can run.
 		if (toolEntries(lane).some((e) => entryMatches(e, "bash"))) continue;
-		const briefPath = path.resolve(cwd, lane.briefPath);
-		if (briefDemandsBash(briefPath)) {
+		const brief = lane.brief ?? fs.readFileSync(path.resolve(cwd, lane.briefPath!), "utf8");
+		if (BRIEF_SHELL_FENCE.test(brief)) {
 			problems.push(
 				`lane '${lane.name}': brief carries a fenced bash/shell block but tools '${lane.tools ?? DEFAULT_LANE_TOOLS}' grants no 'bash' — ` +
 					"grant bash in tools or unfence the block (quoted output belongs in a text fence)",
@@ -174,6 +187,25 @@ export function assertBriefTools(lanes: LaneParams[], cwd: string = process.cwd(
 		}
 	}
 	if (problems.length > 0) throw new Error(problems.join("\n"));
+}
+
+/**
+ * Materialize inline briefs at `<workDir>/<wave>-<name>-brief.md`, recording the
+ * written path as briefPath so spawn argv and the manifest treat every lane alike.
+ * Runs after full validation and after the slug claim (the caller rolls the claim
+ * back on failure): a claimed slug refuses before any file is touched.
+ */
+export function writeInlineBriefs(wave: string, lanes: LaneParams[], workDir: string): void {
+	for (const lane of lanes) {
+		if (lane.brief === undefined) continue;
+		const p = path.join(workDir, `${wave}-${lane.name}-brief.md`);
+		try {
+			fs.writeFileSync(p, lane.brief);
+		} catch (e: any) {
+			throw new Error(`could not write lane '${lane.name}' brief to ${p}: ${e.message} — nothing spawned, the wave slug was freed`);
+		}
+		lane.briefPath = p;
+	}
 }
 
 /**
@@ -197,10 +229,10 @@ export function buildLaneArgs(lane: LaneParams, cfg: Pick<DispatchConfig, "piBin
 		...(lane.noExtensions ? ["-ne"] : []),
 		"--tools",
 		lane.tools ?? DEFAULT_LANE_TOOLS,
-		...(lane.mcp === false ? ["--no-mcp"] : []),
+		...(lane.mcp === true ? [] : ["--no-mcp"]), // offline default — --no-mcp unless the lane opts in
 		...(lane.model ? ["--model", lane.model] : []),
 		...(lane.thinking ? ["--thinking", lane.thinking] : []),
-		`@${path.resolve(lane.briefPath)}`,
+		`@${path.resolve(lane.briefPath!)}`, // materialized before argv: caller file or the inline write
 	];
 }
 
@@ -268,14 +300,15 @@ export function assertDefaultLaneCap(c: {
 export type LanesParamSet = {
 	lane?: unknown;
 	waitMode?: unknown;
+	waitSec?: unknown;
 	inlineMaxBytes?: unknown;
 };
 
 /**
  * Action×parameter compatibility at the tool boundary: a parameter an action
  * does not accept is an error naming the actions that do — silent ignore is a
- * silent fallback (`waitSec`'s legacy carve-out stays one). Enum values are
- * checked here too: the host schema constrains well-behaved models, not bugs.
+ * silent fallback. Enum values are checked here too: the host schema constrains
+ * well-behaved models, not bugs.
  */
 export function assertActionParams(action: string, params: LanesParamSet): void {
 	if (params.lane !== undefined && action !== "kill" && action !== "collect") {
@@ -286,6 +319,11 @@ export function assertActionParams(action: string, params: LanesParamSet): void 
 			throw new Error(`parameter 'waitMode' is not accepted by action '${action}' — it applies only to: wait`);
 		}
 		resolveWaitMode(params.waitMode);
+	}
+	if (params.waitSec !== undefined) {
+		if (action !== "wait") {
+			throw new Error(`parameter 'waitSec' is not accepted by action '${action}' — it applies only to: wait`);
+		}
 	}
 	if (params.inlineMaxBytes !== undefined) {
 		if (action !== "collect") {
