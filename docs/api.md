@@ -7,8 +7,7 @@ this document is the human-facing copy and must stay in sync with both.
 Descriptions are minimal by contract — purpose, workflow skeleton,
 non-inferable semantics, unenforceable warnings; the mechanics below are
 enforced by runtime errors and chained `[next: …]` result hints, not
-schema prose (`waitSec`'s action scoping is the one compatibility
-carve-out that stays prose).
+schema prose.
 
 ## `dispatch`
 
@@ -24,14 +23,15 @@ the leash. Events stream to `<workDir>/<wave>-<name>.events.jsonl`.
 | `wave` | string | — | Wave slug: `kebab-case`, max 64 chars, must not exist in `workDir` |
 | `lanes` | array | — | One entry per lane (min 1); lane slugs unique within the wave |
 | `lanes[].name` | string | — | Lane slug: `kebab-case`, max 64 chars |
-| `lanes[].briefPath` | string | — | Path to the lane's brief file (its `@file` prompt). Briefs are written before the wave is claimed and the workDir is shared across concurrent sessions in the same directory, so brief paths at its root collide — park each session's briefs under its own subdirectory (e.g. `.pi/work/s/<session-id>/`) |
+| `lanes[].brief` | string? | — | Inline alternative to `briefPath` — the lane's entire prompt (non-empty); exactly one of `brief` or `briefPath`. Written to `<workDir>/<wave>-<name>-brief.md` after every lane validates and after the atomic slug claim — a claimed slug refuses before any file is touched, and a failed write rolls the claim back (nothing spawned, slug freed) — and the manifest records the written path as `briefPath` |
+| `lanes[].briefPath` | string? | — | Path to the lane's brief file (its `@file` prompt); exactly one of `briefPath` or `brief`. Briefs are written before the wave is claimed and the workDir is shared across concurrent sessions in the same directory, so brief paths at its root collide — park each session's briefs under its own subdirectory (e.g. `.pi/work/s/<session-id>/`) |
 | `lanes[].model` | string? | pi default | Pin a model id; omitted: pi's **configured default model** — not the dispatcher session's active model. Accepts pi's `id:thinking` suffix (e.g. `zai/glm-4.6:high`) |
 | `lanes[].thinking` | `off\|minimal\|low\|medium\|high\|xhigh\|max`? | none | Pin a thinking level (pi's `--thinking`); wins over any `:level` suffix in `model`; omitted: the model's `:level` suffix if present, else pi's configured default thinking level. pi clamps the level to the model's capabilities — status reports the actual level |
 | `lanes[].deadlineSec` | number? | `deadlineSec` config (900) | Leash in seconds; holds even if the dispatcher is gone. Minimum 1 |
-| `lanes[].tools` | string? | `read,grep,find,ls` | Tool allowlist for `--tools` — plain names or `*` patterns; no `+name`/`-name` modifiers, no shell quoting, not empty. Add `bash` when a lane must run commands (bash can still invoke git — and can write anywhere the dispatcher can: don't grant it to read-only lanes in a shared checkout; give write-capable lanes a scratch dir outside the repo). With MCP enabled, reach requires `codemode` or `tool_search` here — see [MCP and web reach](#mcp-and-web-reach) |
-| `lanes[].noExtensions` | boolean? | false | Pass `-ne` (drop extensions incl. MCP in the lane) |
-| `lanes[].mcp` | boolean? | enabled | Set `false` to pass `--no-mcp` (no MCP servers connect). With MCP enabled, `tools` must name `codemode` or `tool_search` or the call is rejected — servers connecting alone never declares MCP tools to the lane |
-| `workDir` | string? | `workDir` config (`.pi/work`) | Directory for manifest, events, and artifacts |
+| `lanes[].tools` | string? | `read,grep,find,ls` | Tool allowlist for `--tools` — plain names or `*` patterns; no `+name`/`-name` modifiers, no shell quoting, not empty. Add `bash` when a lane must run commands (bash can still invoke git — and can write anywhere the dispatcher can: don't grant it to read-only lanes in a shared checkout; give write-capable lanes a scratch dir outside the repo; e.g. `read,grep,find,ls,bash,edit,write` for a write-capable lane). With MCP enabled, reach requires `codemode` or `tool_search` here — see [MCP and web reach](#mcp-and-web-reach) |
+| `lanes[].noExtensions` | boolean? | false | Drop all extensions incl. MCP (passes `-ne`) |
+| `lanes[].mcp` | boolean? | `false` (offline) | Set `true` to connect MCP servers (`false` passes `--no-mcp` — no MCP servers connect). With MCP enabled, `tools` must name `codemode` or `tool_search` or the call is rejected — servers connecting alone never declares MCP tools to the lane |
+| `workDir` | string? | `workDir` config (`.pi/work`) | Directory for the wave's files — briefs, events, artifacts, manifest |
 
 **Result:** text summary plus `structuredContent` — `{ wave, manifestPath, lanes[] }`
 with each lane's pid, paths, and deadline. The text ends with a one-line
@@ -49,20 +49,25 @@ a brief file missing (all missing paths listed as resolved absolute paths —
 a brief written in the same parallel tool-call batch as this dispatch can
 still be in flight; re-run the same dispatch after the write returns) ·
 malformed or duplicate slugs ·
+a lane giving both or neither of `brief` and `briefPath` ·
 `tools` that is not a plain allowlist (`+name`/`-name` modifiers, shell quoting,
-or an empty list) · a lane leaving MCP enabled while its `tools` names neither
-`codemode` nor `tool_search` · a brief carrying a fenced `bash`/`sh`/`shell`/`zsh`
+or an empty list) · a lane with `mcp: true` whose `tools` names neither
+`codemode` nor `tool_search` · a brief (inline or file) carrying a fenced
+`bash`/`sh`/`shell`/`zsh`
 block while its lane's `tools` grants no `bash` (grant `bash` or unfence — quoted
 output belongs in a `text` fence) · wave slug already exists · `timeoutBin`/`piBin`
 not found on `PATH` · the default-model lane cap would be exceeded (`maxDefaultLanes`; lanes named).
+An inline-brief write failure rolls the slug claim back (nothing spawned,
+slug freed), naming the lane and the path; an empty `brief` validates as
+neither and refuses with `briefPath`.
 
 ### MCP and web reach
 
 `mcp` only controls whether servers connect; it never grants reach. A plain
 `--tools` allowlist replaces the whole selection, and pi declares a server's
 tools to the lane only through the routes below — anything else leaves
-connected servers as unreachable dead weight, so `dispatch` rejects a lane
-that leaves MCP enabled without one:
+connected servers as unreachable dead weight, so `dispatch` rejects an
+`mcp: true` lane that names no route:
 
 - `codemode` — scripts reach every non-hidden server's tools and wait for the
   servers they name: `tools: "read,grep,find,ls,codemode"`
@@ -79,13 +84,16 @@ declares the tools and keeps them callable from scripts. The MCP resource
 tools (`list_mcp_resources`, `list_mcp_resource_templates`,
 `read_mcp_resource`) are exposure-gated the same way and do not count either.
 
-Lanes that need no MCP set `mcp: false`. Entries reach pi verbatim (the
+Lanes are offline by default — `mcp` defaults to `false` (`--no-mcp`); omit
+it unless the lane needs servers. Entries reach pi verbatim (the
 allowlist is one argv value — no shell quoting), and `+name`/`-name` modifier
 lists are rejected because pi applies them to its default selection, silently
 granting `bash`/`edit`/`write`.
 
 **Recursion guard:** lanes run with `PI_MINIMAL_DISPATCH_CHILD=1` in their
-environment, and the extension's factory stays out of any process carrying that
+environment — part of the lane protocol; other extensions may key on it to
+detect lane context, so renaming it is a breaking change — and the extension's
+factory stays out of any process carrying that
 marker — a lane never gets the `dispatch` tool. `-ne` (`noExtensions`) remains
 the switch that drops all extensions and MCP in a lane. Every lane in a call is
 spawned; the caller bounds the wave.
@@ -105,12 +113,11 @@ fresh one after the dispatcher exited — sees the same truth.
 | `inlineMaxBytes` | integer? | `0` | `collect` only: inline each non-suspect lane's artifact content after its line when the artifact is ≤ N bytes (0 = never inline) |
 | `workDir` | string? | `workDir` config (`.pi/work`) | Directory holding the manifest |
 
-A parameter its action does not accept (`lane`, `waitMode`, `inlineMaxBytes`)
-is rejected with an error naming the actions that take it — never silently
-ignored. (`waitSec` outside `wait` keeps its legacy silent-ignore: a
-compatibility carve-out, not the pattern.) An unknown `wave` errors with the
-expected manifest path and a pointer to list live waves
-(`ls <workDir>/*-manifest.json`).
+A parameter its action does not accept (`lane`, `waitMode`, `waitSec`,
+`inlineMaxBytes`) is rejected with an error naming the actions that take it —
+never silently ignored. An unknown `wave` errors with the expected manifest
+path and enumerates the workDir's live waves (`no live waves` when there are
+none).
 
 ### `status`
 

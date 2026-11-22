@@ -23,6 +23,9 @@ outputs) and docs second — the calling model reads only schemas and runtime
 messages, so model-facing knowledge never lands in docs alone. Schema
 tokens ride every request of every session, paid even when no wave is ever
 dispatched — an edit that grows a description past that core is a defect.
+Usage policy — when to fan out, tiering taste — is the installer's layer:
+schemas stay policy-free, and README ships a drop-in policy block to copy
+and adapt.
 
 ## Layout
 

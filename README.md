@@ -21,9 +21,9 @@ rosters and per-role system-prompt markdown, concurrency pools and spawn
 budgets, fleet UIs, hub servers or daemons that must stay alive.
 pi-minimal-dispatch takes the other end of the trade:
 
-- **No personas, no role play** — a lane is a brief file plus optional
-  `model`/`thinking` pins; the dispatching agent writes each brief, so
-  it keeps the judgment.
+- **No personas, no role play** — a lane is a brief — inline (`brief`) or a
+  file (`briefPath`) — plus optional `model`/`thinking` pins; the
+  dispatching agent writes each brief, so it keeps the judgment.
 - **The filesystem is the whole protocol** — briefs in, JSONL events,
   one manifest, artifacts out; no server, no in-memory state, re-adoptable
   by any later session.
@@ -53,8 +53,9 @@ pi -e ./src/index.ts                                   # try it for one invocati
 
 ## Quick start
 
-Write one brief file per lane — the lane's whole prompt: goal, scope,
-expected deliverable. Then ask in plain language:
+Write one brief per lane — inline (`brief`) or as a file (`briefPath`) — the
+lane's whole prompt: goal, scope, expected deliverable. Then ask in plain
+language:
 
 ```text
 Dispatch two lanes: docs summarizes the request-handling module, review audits src/auth.
@@ -65,8 +66,9 @@ A real session:
 
 ```text
 > dispatch  wave="survey" lanes=[{name:"docs", briefPath:".pi/work/s/<session-id>/survey-docs-brief.md",
-            model:"zai/glm-5.3-flash", mcp:false},
-            {name:"review", briefPath:".pi/work/s/<session-id>/survey-review-brief.md", mcp:false}]
+            model:"zai/glm-5.3-flash"},
+            {name:"review", briefPath:".pi/work/s/<session-id>/survey-review-brief.md", mcp:true,
+            tools:"read,grep,find,ls,codemode"}]
   wave 'survey' dispatched — 2/2 lanes spawned
     docs: pid 99015 (deadline 900s)
     review: pid 99016 (deadline 900s)
@@ -112,13 +114,17 @@ blocks; waiting is the bounded `wait` call) live in the schemas — the
 ```text
 - Dispatch a sub-task when it deserves its own context: read-only
   exploration before implementing, parallel investigation lanes. Research
-  fan-out is the dispatch pattern; implementation itself stays in the main
-  session as one coherent change.
-- One brief file per lane is its entire prompt — goal, scope, expected
-  deliverable and format, what not to do, and a line stating the addressee
-  is a dispatched leaf with no shared context. Park briefs under a
-  per-session subdirectory (.pi/work/s/<session-id>/).
-- Tier the lane to the job; grant bash only with cause.
+  fan-out is the classic pattern; whether implementation dispatches is your
+  policy — the tools support write-capable lanes the same way.
+- One brief per lane — inline (`brief`) or a file (`briefPath`) — is its
+  entire prompt: goal, scope, expected deliverable and format, what not to
+  do, and a line stating the addressee is a dispatched leaf with no shared
+  context. Park briefs under a per-session subdirectory
+  (.pi/work/s/<session-id>/).
+- Tier the lane to the job — mechanical recon and investigation on a cheap
+  fast model (pin `model`, add `thinking`), judgment and verdict work on
+  the strong model; grant bash only with cause. Valid `model` ids:
+  `pi --list-models`.
 - Consume waves: wait (bounded) → collect → release; never hand-delete
   workDir contents while a lane may still be running.
 ```
@@ -134,10 +140,10 @@ Two tools — full parameter, output, and configuration reference in
   `release` over the wave's manifest; any session can re-adopt a wave,
   including after the dispatcher exited.
 
-**Web/MCP reach**: the default lane is offline — MCP servers connecting
-grants nothing by themselves; a lane reaches their tools only through
-`codemode` or `tool_search` named in its `tools`. Rules and examples:
-[MCP and web reach](docs/api.md#mcp-and-web-reach).
+**Web/MCP reach**: the default lane is offline — set `mcp: true` to connect
+MCP servers; connecting grants nothing by themselves, and a lane reaches
+their tools only through `codemode` or `tool_search` named in its `tools`.
+Rules and examples: [MCP and web reach](docs/api.md#mcp-and-web-reach).
 
 ## Configuration
 

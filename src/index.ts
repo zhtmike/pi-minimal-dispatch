@@ -68,6 +68,7 @@ import {
 	type LaneParams,
 	assertActionParams,
 	assertBriefTools,
+	assertBriefXor,
 	assertDefaultLaneCap,
 	assertLaneTools,
 	assertSlugs,
@@ -83,6 +84,7 @@ import {
 	resolveWaitMode,
 	selectKillTargets,
 	waveClaimedError,
+	writeInlineBriefs,
 } from "./lane.ts";
 
 /**
@@ -98,7 +100,7 @@ let readSettings!: () => { defaultProvider?: string; defaultModel?: string };
 
 /** Spawn one lane detached; a failure at any step becomes the record's spawnError, never a throw. */
 function spawnLane(workDir: string, wave: string, lane: LaneParams, cfg: DispatchConfig, timeoutBin: string): LaneRecord {
-	const briefPath = path.resolve(lane.briefPath);
+	const briefPath = path.resolve(lane.briefPath!); // materialized before spawn: caller file or the inline write
 	const record: LaneRecord = {
 		name: lane.name,
 		briefPath,
@@ -163,26 +165,27 @@ const dispatchTool = defineTool({
 	description:
 		"Spawn detached sub-agent lanes (fresh pi processes) for a wave and return immediately; " +
 		"lanes survive this session's exit, and every lane in the call is spawned — no queueing. " +
-		"One brief file per lane is that lane's entire prompt — write briefs first; a lane sees nothing else: " +
-		"no skills, no session context, read-only tools unless granted more, never the dispatch tool. " +
-		"The workDir is shared across sessions — park briefs under a per-session subdirectory (e.g. `.pi/work/s/<session-id>/`). " +
-		"Then wait (lanes action='wait'), collect artifacts when settled, release the wave when done.",
+		"A lane's brief is its entire prompt — inline (`brief`) or a file (`briefPath`); write briefs first; " +
+		"a lane sees nothing else: no skills, no session context, read-only tools unless granted more, never the dispatch tool. " +
+		"The workDir is shared across sessions — park briefs under a subdirectory unique to this session. " +
+		"Then wait, collect artifacts when settled, release the wave when done.",
 	parameters: Type.Object({
 		wave: Type.String({ description: "Wave slug" }),
 		lanes: Type.Array(
 			Type.Object({
 				name: Type.String({ description: "Lane slug" }),
-				briefPath: Type.String({ description: "Path to the lane's brief file (@file prompt)" }),
+				brief: Type.Optional(Type.String({ description: "Inline alternative to briefPath — the lane's entire prompt; exactly one of brief or briefPath; written to <workDir>/<wave>-<name>-brief.md" })),
+				briefPath: Type.Optional(Type.String({ description: "Path to the lane's brief file (@file prompt); exactly one of briefPath or brief" })),
 				model: Type.Optional(Type.String({ description: "Pin a model id, pi's id:thinking suffix allowed; omitted: pi's configured default — not necessarily this session's active model" })),
 				thinking: Type.Optional(stringEnum(["off", "minimal", "low", "medium", "high", "xhigh", "max"], { description: "Pin a thinking level; wins over model's :level suffix — status reports the actual level" })),
 				deadlineSec: Type.Optional(Type.Number({ description: "Deadline leash in seconds (config default: 900)", minimum: 1 })),
-				tools: Type.Optional(Type.String({ description: "Tool allowlist, comma-separated; default 'read,grep,find,ls' (read-only — grant 'bash' only with cause)" })),
-				noExtensions: Type.Optional(Type.Boolean({ description: "Pass -ne (drop extensions incl. MCP)" })),
-				mcp: Type.Optional(Type.Boolean({ description: "false: no MCP servers connect" })),
+				tools: Type.Optional(Type.String({ description: "Tool allowlist, comma-separated; default 'read,grep,find,ls' (read-only — grant 'bash' only with cause; e.g. 'read,grep,find,ls,bash,edit,write' for a write-capable lane)" })),
+				noExtensions: Type.Optional(Type.Boolean({ description: "Drop all extensions incl. MCP (passes -ne)" })),
+				mcp: Type.Optional(Type.Boolean({ description: "true: connect MCP servers — the lane's tools must then name a route to them ('codemode' or 'tool_search'; an 'mcp__server__*' entry alone reaches only direct-exposure servers — pair it with codemode); default false — no MCP servers connect" })),
 			}),
 			{ minItems: 1 },
 		),
-		workDir: Type.Optional(Type.String({ description: "Directory for briefs/events/manifest (config default: .pi/work)" })),
+		workDir: Type.Optional(Type.String({ description: "Directory for the wave's files — briefs, events, manifest (config default: .pi/work)" })),
 	}),
 
 	async execute(_id, params, _signal, _onUpdate, ctx) {
@@ -194,6 +197,8 @@ const dispatchTool = defineTool({
 		const owner = currentOwner(ctx.sessionManager.getSessionId());
 		// Slugs are validated before the manifest claim: a post-claim throw would strand the slug.
 		assertSlugs(params.wave, params.lanes.map((l) => l.name));
+		// The brief source is validated first: every later brief check dereferences one of the two params.
+		assertBriefXor(params.lanes);
 
 		// All briefs must exist before anything spawns: report every missing one.
 		const missing = missingBriefs(params.lanes);
@@ -225,6 +230,16 @@ const dispatchTool = defineTool({
 			claimFd = fs.openSync(manifestPath, "wx");
 		} catch (e: any) {
 			if (e.code === "EEXIST") throw new Error(waveClaimedError(params.wave, manifestPath));
+			throw e;
+		}
+
+		// Inline briefs land after the claim: a claimed-slug re-dispatch refuses before any
+		// file is touched, and a failed write rolls the claim back — no partial wave, no orphan briefs.
+		try {
+			writeInlineBriefs(params.wave, params.lanes, workDir);
+		} catch (e) {
+			fs.closeSync(claimFd);
+			fs.unlinkSync(manifestPath);
 			throw e;
 		}
 
@@ -312,7 +327,7 @@ const lanesTool = defineTool({
 		waitMode: Type.Optional(
 			stringEnum(["all", "hold", "any"], { description: "'all' (default): every lane settled or any failed · 'hold': sit out known failures until all lanes are terminal · 'any': return at the first terminal lane" }),
 		),
-		waitSec: Type.Optional(Type.Number({ description: "wait action only: max seconds to hold the call open (default 300; 1–3600)", minimum: 1, maximum: 3600 })),
+		waitSec: Type.Optional(Type.Number({ description: "max seconds to hold the call open (default 300; 1–3600)", minimum: 1, maximum: 3600 })),
 		inlineMaxBytes: Type.Optional(
 			Type.Integer({
 				minimum: 0,

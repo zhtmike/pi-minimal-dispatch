@@ -265,8 +265,20 @@ try {
 } catch (e) {
 	const msg = String(e);
 	check(
-		"readManifest: unknown wave names the path and lists live waves",
-		msg.includes("unknown wave 'never-existed'") && msg.includes("no manifest at") && msg.includes("ls ") && msg.includes("*-manifest.json"),
+		"readManifest: unknown wave names the path and reports when no waves are live",
+		msg.includes("unknown wave 'never-existed'") && msg.includes("no manifest at") && msg.includes("no live waves"),
+		msg,
+	);
+}
+writeWManifest();
+try {
+	readManifest(workDir2, "never-existed");
+	check("readManifest: unknown wave enumerates live waves", false);
+} catch (e) {
+	const msg = String(e);
+	check(
+		"readManifest: unknown wave enumerates live waves",
+		msg.includes("live waves: w"),
 		msg,
 	);
 }
