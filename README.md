@@ -130,6 +130,8 @@ blocks; waiting is the bounded `wait` call) live in the schemas — the
   `mcp: true` + `codemode`. Name the covering tests in the brief — a lane
   set to run an unscoped full suite eats its own deadline.
   Valid `model` ids: `pi --list-models`.
+- Scope a lane's searches to the paths its brief names — global or
+  systematic sweeps burn the lane's own deadline.
 - Consume waves: wait (bounded) → collect → release; never hand-delete
   workDir contents while a lane may still be running.
 ```
